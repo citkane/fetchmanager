@@ -41,10 +41,10 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i
   ): Promise<T>;
@@ -53,19 +53,19 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o<K>
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T[] | T>;
 
   /**
    * The wrapped native `fetch` method
@@ -162,7 +162,7 @@ export default class FetchManager<G extends fm.kind> {
       reqs.decr_concurrent();
       if (!resp.ok) return error(ctx, resp);
       if (pager_cb) return pager(ctx, resp, pager_cb);
-      if (!response_cb) return resp;
+      if (!response_cb) return resolve(resp);
 
       try {
         const req = to_fm_req(ctx_req);
