@@ -90,7 +90,7 @@ export default class LibCallback<G extends fm.kind> implements fm.lib<G> {
       };
     },
   };
-  timeout = {
+  wait = {
     backoff_factory: () => {
       let count = 0;
       let ms = 0;

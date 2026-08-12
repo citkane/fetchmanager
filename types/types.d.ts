@@ -64,10 +64,11 @@ namespace fm {
   namespace cb {
     /**
      *
-     * # Optional callback function that flags if a request should be retried.
+     * # Callback function that flags if a failed request should be retried.
+     * Generally used to look for 503, 429, etc type responses
      * @param resp {@link Response}
      * @param fm_req {@link Request} || {@link p.req_url}
-     * @returns `boolean`
+     * @returns `boolean` - true to retry, false to discard to error
      */
     type retry<K extends kind> = (
       resp: Response | Error,
@@ -76,19 +77,22 @@ namespace fm {
 
     /**
      *
-     * # Optional callback function that sets milliseconds to pause the fetch queue.
+     * # Callback function that pauses the fetch queue before retrying a request.
+     * The user logic within can be used to:  
+     * - create request backoff behaviour
+     * - determine absolute wait time from the server response
      * @param resp {@link Response}
      * @param fm_req {@link Request} || {@link p.req_url}
-     * @returns `number` of ms
+     * @returns `number` in ms to wait for
      */
-    type t_out<K extends kind> = (
+    type wait<K extends kind> = (
       resp: Response | Error,
       fm_req: req<K>,
     ) => number;
 
     /**
      *
-     * # Optional callback function to alter returned data after `Response` is recieved.
+     * # Callback function that processes a Response, returning the intended data.
      * @param resp {@link Response}
      * @param fm_req {@link Request} || {@link p.req_url}
      * @returns `any`
@@ -97,20 +101,49 @@ namespace fm {
 
     /**
      *
-     * # Optional callback function to manage request paging.
-     * @param resp {@link Response}
-     * @param collector `any[]` - optional data collector. If used,
-     * it will be returned as the `fetch` result negating further defined handlers.
-     * @param fm_req {@link Request} || {@link p.req_url}
-     * @returns
-     * + Next page request: {@link Request} || {@link p.req_url} as K || Promise\<K\>
-     * + Stop paging:`undefined` || `null` as K || Promise\<K\>
+     * # A callback function to collect pagination results.
+     * It stores an array of results which is resolved to {@link FetchManager.fetch} after pagination has completed.
+     * @example
+     * ```ts
+     * async (resp, req, collect) => {
+     *   const { next, data } = (await resp.json()) as data_type;
+     *   if (!next) return; // return nullish value to stop paging
+     *
+     *   collect(data);
+     *   const url = new URL(req.url);
+     *   url.searchParams.set("offset", next.offset);
+     *   return new Request(url, req); // return request to continue paging
+     * }
+     * ```
+     *
+     * ## collect
+     * Usage of {@link page_collector collect} is optional. If not used, the final result defaults to:
+     * 1) If `response_cb` is set - `ReturnType<response_cb>[]` else
+     * 2) `Response[]`
+     *
+     * `collect(data[])` defaults to merging input arrays into the final returned array.
+     * The default behaviour can be overidden by using `collect(data[], false)` so that the final result will be `data[][]`
+     * @param resp [Response]
+     * @param collect [fm.cb.page_collector] - optional data collector.
+     * @param fm_req [Request | fm.p.req_url]
+     * @returns The user must return, sync or async, one of:
+     * + The next page request: `Request | fm.p.req_url`
+     * + To stop paging: `undefined | null` or just `return`
      */
     type pager<K extends kind> = (
       resp: Response,
       fm_req: req<K>,
-      collector: any[],
+      collect: page_collector,
     ) => p.pager_cb_rtn<K> | Promise<p.pager_cb_rtn<K>>;
+
+    /**
+     *
+     * Data collector for paginated requests
+     * The data is added to an Array which is returned as the final `Response` when pagination completes.
+     * @param payload [any] The data to collect. Standard behaviour is to merge input arrays with the collection array to prevent `result[][]` types.
+     * @param merge [boolean?] default = true. Set to false to prevent array merging
+     * */
+    type page_collector = (payload: any[] | any, merge = true) => void;
 
     /**
      *
@@ -147,7 +180,7 @@ namespace fm {
      * @param heartbeat `number` - frequency in ms to poll the request queue.
      * @param response_cb {@link fm.cb.resp}
      * @param retry_cb {@link fm.cb.retry}
-     * @param timeout_cb {@link fm.cb.t_out}
+     * @param wait_cb {@link fm.cb.wait}
      * @param trace_cb {@link fm.cb.trace}
      */
     type global<K extends kind> = {
@@ -165,7 +198,7 @@ namespace fm {
      * @see {@link fm.cb} for optional callback function handlers
      * @param response_cb [fm.cb.resp?]
      * @param retry_cb [fm.cb.retry?]
-     * @param timeout_cb [fm.cb.t_out?]
+     * @param wait_cb [fm.cb.t_out?]
      * @param trace_cb [fm.cb.trace?]
      */
     type fetch<K extends kind> = {
@@ -247,7 +280,7 @@ namespace fm {
     retry: {
       [key: string]: fm.cb.resp<K> | ((...p: any[]) => fm.cb.resp<K>);
     };
-    timeout: {
+    wait: {
       [key: string]: fm.cb.resp<K> | ((...p: any[]) => fm.cb.resp<K>);
     };
     response: { [key: string]: fm.cb.resp<K> };
@@ -259,7 +292,7 @@ namespace fm {
     type handlers<K extends fm.kind> = {
       response_cb?: fm.cb.resp<K>;
       retry_cb?: fm.cb.retry<K>;
-      timeout_cb?: fm.cb.t_out<K>;
+      wait_cb?: fm.cb.wait<K>;
       trace_cb?: fm.cb.trace;
     };
     type req_url = { url: string; req_init?: RequestInit };
