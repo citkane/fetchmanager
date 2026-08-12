@@ -41,10 +41,10 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_o_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i
   ): Promise<T>;
@@ -53,19 +53,19 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_o_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o<K>
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o_p<K>
-  ): Promise<T[] | T>;
+  ): Promise<T>;
 
   /**
    * The wrapped native `fetch` method
@@ -183,7 +183,7 @@ export default class FetchManager<G extends fm.kind> {
   ): fm.p.limiter<G> => {
     const { handle, err } = this;
     const hosts = this.hosts.fm_to_ctx_hosts(fm_hosts);
-    const { response_cb, retry_cb, timeout_cb, trace_cb } = options!;
+    const { response_cb, retry_cb, wait_cb, trace_cb } = options!;
     const reqs = reqs_factory(max_concurrency);
     const paused = paused_factory(options!);
     const rpp = rpp_factory(rpp_period, max_rpp);
@@ -196,7 +196,7 @@ export default class FetchManager<G extends fm.kind> {
       rpp,
       response_cb,
       retry_cb,
-      timeout_cb,
+      wait_cb,
       trace_cb,
     };
 
@@ -397,7 +397,7 @@ export default class FetchManager<G extends fm.kind> {
         const handler_keys: (keyof fm.p.handlers<G>)[] = [
           "response_cb",
           "retry_cb",
-          "timeout_cb",
+          "wait_cb",
           "trace_cb",
         ];
         const handlers = {
@@ -549,15 +549,15 @@ export default class FetchManager<G extends fm.kind> {
     },
 
     pause: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { timeout_cb, reject, ctx_req } = ctx;
+      const { wait_cb, reject, ctx_req } = ctx;
       const { paused, timeout_ms } = this.limiter;
       const ms = timeout_ms;
-      if (!timeout_cb) return paused.set_state(ms);
+      if (!wait_cb) return paused.set_state(ms);
 
       try {
         const { to_fm_req } = this.args;
         resp = resp instanceof Response ? resp.clone() : resp;
-        const ms = timeout_cb(resp, to_fm_req(ctx_req));
+        const ms = wait_cb(resp, to_fm_req(ctx_req));
         paused.set_state(ms);
       } catch (err) {
         reject(err);
@@ -585,7 +585,7 @@ export default class FetchManager<G extends fm.kind> {
       const req = to_fm_req(ctx_req);
       let new_req: fm.p.pager_cb_rtn<G>;
       try {
-        new_req = await pager_cb(resp.clone(), req, user);
+        new_req = await pager_cb(resp.clone(), req, user_collector);
       } catch (err) {
         reject(err);
       }
@@ -604,6 +604,15 @@ export default class FetchManager<G extends fm.kind> {
         resolve(resp_array);
       } catch (err) {
         reject(err);
+      }
+
+      function user_collector(payload: any[] | any, merge = true) {
+        if (Array.isArray(payload) && merge) {
+          payload.forEach((val) => user.push(val));
+          return;
+        }
+
+        user.push(payload);
       }
     },
   };
