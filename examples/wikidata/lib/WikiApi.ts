@@ -12,12 +12,15 @@ export class WikiApi {
   ) => {
     const { headers, api } = this;
     const url = new URL(api.action);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 1000);
+
     url.search = params();
     if (next)
       Object.entries(next).forEach(([key, val]) =>
         url.searchParams.set(key, String(val)),
       );
-    return new Request(url, { headers });
+    return new Request(url, { headers, signal: controller.signal });
 
     function params() {
       const _statements = statements
@@ -35,8 +38,10 @@ export class WikiApi {
 
   public explore = (topic: string) => {
     const { headers, api } = this;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 1000);
     const url = new URL(`${api.entity}/${topic}.json`);
-    return new Request(url, { headers });
+    return new Request(url, { headers, signal: controller.signal });
   };
 
   public definitions = (ids: string[], limit = 50) => {

@@ -111,6 +111,7 @@ const fetch_wiki = new FetchManager(
 /* ---------------------------------------------------
  *  Proceed with user application logic
  * --------------------------------------------------- */
+
 async function search(
   term: string,
   limit?: number,
