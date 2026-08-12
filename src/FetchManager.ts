@@ -189,7 +189,7 @@ export default class FetchManager<G extends fm.kind> {
     const rpp = rpp_factory(rpp_period, max_rpp);
 
     return {
-      timeout_ms: options!.wait_ms!,
+      wait_ms: options!.wait_ms!,
       hosts,
       reqs,
       paused,
@@ -550,8 +550,8 @@ export default class FetchManager<G extends fm.kind> {
 
     pause: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
       const { wait_cb, reject, ctx_req } = ctx;
-      const { paused, timeout_ms } = this.limiter;
-      const ms = timeout_ms;
+      const { paused, wait_ms } = this.limiter;
+      const ms = wait_ms;
       if (!wait_cb) return paused.set_state(ms);
 
       try {

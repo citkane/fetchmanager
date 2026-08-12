@@ -326,7 +326,7 @@ namespace fm {
       req?: Request;
     };
     type limiter<K extends fm.kind> = {
-      timeout_ms: number;
+      wait_ms: number;
       hosts: { [hostname: string]: host<K> };
       reqs: limiter_reqs<K>;
       paused: limiter_paused;
