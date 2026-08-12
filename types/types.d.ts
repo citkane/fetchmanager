@@ -176,15 +176,15 @@ namespace fm {
     /**
      *
      * # User options for the class constructor.
-     * @param default_retry_timeout_ms `number` - ms to pause before retrying a request.
-     * @param heartbeat `number` - frequency in ms to poll the request queue.
+     * @param wait_ms `number` - ms to pause before retrying a request. Default 500
+     * @param heartbeat `number` - frequency in ms to poll the request queue. Default 20
      * @param response_cb {@link fm.cb.resp}
      * @param retry_cb {@link fm.cb.retry}
      * @param wait_cb {@link fm.cb.wait}
      * @param trace_cb {@link fm.cb.trace}
      */
     type global<K extends kind> = {
-      timeout_ms?: number;
+      wait_ms?: number;
       heartbeat?: number;
     } & fm.p.handlers<K>;
 

@@ -3,7 +3,7 @@
 export default class FetchManager<G extends fm.kind> {
   constructor(...opts: fm.opts.instance<G>) {
     const default_opts = {
-      timeout_ms: 500,
+      wait_ms: 500,
       heartbeat: 20,
     };
     const { limiters } = FetchManager;
@@ -189,7 +189,7 @@ export default class FetchManager<G extends fm.kind> {
     const rpp = rpp_factory(rpp_period, max_rpp);
 
     return {
-      timeout_ms: options!.timeout_ms!,
+      timeout_ms: options!.wait_ms!,
       hosts,
       reqs,
       paused,
