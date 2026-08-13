@@ -23,11 +23,10 @@ const handlers: handlers = {
   trace: (trace_data) => {
     if (log_debug) return console.debug(trace_data);
 
-    let { paused, throttled, message, concurrency, rpp, href } = trace_data;
+    let { paused, message, concurrency, rpp, href } = trace_data;
     let log: string[] = [];
     paused && message && log.push(message);
     paused && log.push(`paused: ${paused}`);
-    paused && throttled && log.push(`throttled: ${throttled}`);
     paused && concurrency && log.push(`concurrency: ${concurrency}`);
     log.length && log.push(`rpp: ${rpp}`);
     !log.length && log.push(`Fetching: ${decodeURI(href)}\r`);
@@ -50,9 +49,9 @@ const handlers: handlers = {
    * */
   pager: async (resp, req, collect) => {
     const { continue: next, query } = (await resp.json()) as w.resp.search;
+    collect(query.search);
     if (!next) return;
 
-    collect(query.search);
     const url = new URL(req.url);
     url.searchParams.set("continue", next.continue);
     url.searchParams.set("sroffset", String(next.sroffset));
@@ -86,7 +85,7 @@ const hosts: fm.host<"req">[] = [
    * If a handler is not defined in a request, these will apply (priority 2)
    * */
   {
-    hostname: "www.wikidata.org",
+    host_string: "www.wikidata.org",
     wait_cb: handlers.wait,
     retry_cb: handlers.retry,
   },

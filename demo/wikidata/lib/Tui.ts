@@ -179,7 +179,7 @@ export class Tui {
       const { continue: cont, query } = search_result as w.resp.search;
       const index = next?.sroffset || 0;
       const total_len = query?.searchinfo?.totalhits || 0;
-      const rem = Math.max(0, total_len - (index + limit) - 1);
+      const rem = Math.max(0, total_len - (index + limit));
 
       console.clear();
       const header_index = `[${index} - ${index + limit}]`;
@@ -237,8 +237,8 @@ export class Tui {
 
       const all_pids = Object.keys(props_entity);
       const size = all_pids.length;
-      const rem = Math.max(0, size - (index + limit) - 1);
-      const last_index = rem ? index + limit : size - 1;
+      const rem = Math.max(0, size - (index + limit));
+      const last_index = rem ? index + limit : size;
       const pids = all_pids.slice(index, last_index);
 
       console.clear();
@@ -457,7 +457,7 @@ export class Tui {
         if (qual_len && det) await print.qualifiers(claim!);
       }
 
-      const rem = claims.length - claims_batch.length - 1;
+      const rem = claims.length - claims_batch.length;
       if (rem > 0) print.more_tabbed(rem);
     },
 
@@ -493,7 +493,7 @@ export class Tui {
 
       setTimeout(() => {
         const history = cache.get.history();
-        const options = ["Menu:"];
+        const options = [];
 
         if (history) options.push(`${b("b")} back`);
         options.push(`${b("#")} explore topic`);
