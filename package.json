@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "exports": {
     ".": "./src/FetchManager.ts",
-    "./lib": "./lib/LibCallback.ts"
+    "./lib": "./src/LibCallback.ts"
   },
   "module": "./src/FetchManager.ts",
   "peerDependencies": {
