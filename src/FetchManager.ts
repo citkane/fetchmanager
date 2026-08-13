@@ -1,9 +1,9 @@
-/// <reference path="../types/types.d.ts" />
+/// <reference path="./types.d.ts" />
 
 export default class FetchManager<G extends fm.kind> {
   constructor(...opts: fm.opts.instance<G>) {
     const default_opts = {
-      timeout_ms: 500,
+      wait_ms: 500,
       heartbeat: 20,
     };
     const { limiters } = FetchManager;
@@ -41,10 +41,10 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.r_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i
   ): Promise<T>;
@@ -53,19 +53,19 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o<K>
   ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
   public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
     ...p: fm.fol.u_i_o_p<K>
-  ): Promise<T[]>;
+  ): Promise<T>;
 
   /**
    * The wrapped native `fetch` method
@@ -94,7 +94,7 @@ export default class FetchManager<G extends fm.kind> {
 
   private queue_req = async (part_ctx: Partial<fm.p.ctx<G>>) => {
     const { fetch_factory, unshift_queue, push_queue, err } = this;
-    const { skip_queue, hostname, resolve } = part_ctx;
+    const { skip_queue, host_string, resolve } = part_ctx;
     const full_ctx = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
     if (full_ctx) {
       const req_fn = fetch_factory(full_ctx);
@@ -103,8 +103,8 @@ export default class FetchManager<G extends fm.kind> {
     }
 
     const def = { defined: this.host_keys };
-    const is_def = def.defined.includes(hostname!);
-    if (!is_def) return err.reject(`Hostname not defined: ${hostname}`, def);
+    const is_def = def.defined.includes(host_string!);
+    if (!is_def) return err.reject(`Host not defined: ${host_string}`, def);
 
     return new Promise((resolve, reject) => {
       const full_ctx = { ...part_ctx, resolve, reject } as fm.p.ctx<G>;
@@ -162,7 +162,7 @@ export default class FetchManager<G extends fm.kind> {
       reqs.decr_concurrent();
       if (!resp.ok) return error(ctx, resp);
       if (pager_cb) return pager(ctx, resp, pager_cb);
-      if (!response_cb) return resp;
+      if (!response_cb) return resolve(resp);
 
       try {
         const req = to_fm_req(ctx_req);
@@ -183,20 +183,20 @@ export default class FetchManager<G extends fm.kind> {
   ): fm.p.limiter<G> => {
     const { handle, err } = this;
     const hosts = this.hosts.fm_to_ctx_hosts(fm_hosts);
-    const { response_cb, retry_cb, timeout_cb, trace_cb } = options!;
+    const { response_cb, retry_cb, wait_cb, trace_cb } = options!;
     const reqs = reqs_factory(max_concurrency);
     const paused = paused_factory(options!);
     const rpp = rpp_factory(rpp_period, max_rpp);
 
     return {
-      timeout_ms: options!.timeout_ms!,
+      wait_ms: options!.wait_ms!,
       hosts,
       reqs,
       paused,
       rpp,
       response_cb,
       retry_cb,
-      timeout_cb,
+      wait_cb,
       trace_cb,
     };
 
@@ -259,11 +259,8 @@ export default class FetchManager<G extends fm.kind> {
     function rpp_factory(period: fm.period, max: number): fm.p.limiter_rpp {
       const rpp_period_ms = FetchManager.period_ms[period];
       const rpp_tracker: number[] = [];
-      const rpp = { rate: 0, max, period, is_throttled, throttle, increment };
+      const rpp = { rate: 0, max, period, throttle, increment };
       return rpp;
-      function is_throttled() {
-        return rpp.rate >= max ? `[${rpp.rate}:${max}]` : undefined;
-      }
       function throttle() {
         rpp.rate = calc_rpp();
         return rpp.rate >= max;
@@ -378,14 +375,14 @@ export default class FetchManager<G extends fm.kind> {
     make_ctx: (pms: fm.p.ctx_pms<G>): Partial<fm.p.ctx<G>> => {
       const { hosts, limiter } = this;
       const { options, url, req, req_init, pager_cb } = pms;
-      const hostname = hosts.hostname(url, req);
-      const host = limiter.hosts[hostname]!;
+      const host_string = hosts.hostname(url, req);
+      const host = limiter.hosts[host_string]!;
       const ctx_req: fm.p.ctx_req = { url, req_init, req };
       const page_collector = { user: [] as any[], system: [] as Response[] };
       const handlers = cascade_handlers();
       return {
         ctx_req,
-        hostname,
+        host_string,
         skip_queue: false,
         force_retry: 0,
         page_collector,
@@ -397,7 +394,7 @@ export default class FetchManager<G extends fm.kind> {
         const handler_keys: (keyof fm.p.handlers<G>)[] = [
           "response_cb",
           "retry_cb",
-          "timeout_cb",
+          "wait_cb",
           "trace_cb",
         ];
         const handlers = {
@@ -445,14 +442,13 @@ export default class FetchManager<G extends fm.kind> {
 
   private hosts = {
     make_debug_data: (ctx: fm.p.ctx<G>, mssg?: string): fm.trace_data => {
-      const { force_retry, hostname, skip_queue } = ctx;
+      const { force_retry, host_string, skip_queue } = ctx;
       const { rpp, reqs, paused } = this.limiter;
       const href = this.hosts.href(ctx);
       return {
         message: mssg,
-        paused: paused.ms ? `${(paused.ms / 1000).toFixed(2)}sec` : undefined,
+        paused: paused.ms,
         stopped: reqs.why_stopped(),
-        throttled: rpp.is_throttled(),
         rpp: rpp.rate,
         rpp_max: rpp.max,
         rpp_period: rpp.period,
@@ -461,34 +457,37 @@ export default class FetchManager<G extends fm.kind> {
         queue: reqs.queue.length,
         force_retry,
         skip_queue,
-        hostname,
+        host_string,
         href,
       };
     },
 
     make_host_keys: (hosts: fm.host<G>[]) => {
       const host_strings = hosts.map((host) => {
-        return typeof host === "string" ? host : host.hostname;
+        return typeof host === "string" ? host : host.host_string;
       });
       return [...new Set(host_strings)];
     },
 
     fm_to_ctx_hosts: (hosts: fm.host<G>[]) => {
       const { err } = this;
-      return hosts.reduce(reducer, {} as { [hostname: string]: fm.p.host<G> });
+      return hosts.reduce(
+        reducer,
+        {} as { [host_string: string]: fm.p.host<G> },
+      );
 
       function reducer(
-        hosts: { [hostname: string]: fm.p.host<G> },
+        hosts: { [host_string: string]: fm.p.host<G> },
         fm_host: fm.host<G>,
       ) {
         const is_host = typeof fm_host !== "string";
-        const host = is_host ? fm_host : { hostname: fm_host };
-        const { hostname } = host;
-        if (!hosts[hostname]) {
-          hosts[hostname] = host;
+        const host = is_host ? fm_host : { host_string: fm_host };
+        const { host_string } = host;
+        if (!hosts[host_string]) {
+          hosts[host_string] = host;
           return hosts;
         }
-        const mssg = `${hostname} is defined multiple times. Options from first instance retained`;
+        const mssg = `${host_string} is defined multiple times. Options from first instance retained`;
         err.warn(mssg, host);
         return hosts;
       }
@@ -549,15 +548,15 @@ export default class FetchManager<G extends fm.kind> {
     },
 
     pause: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { timeout_cb, reject, ctx_req } = ctx;
-      const { paused, timeout_ms } = this.limiter;
-      const ms = timeout_ms;
-      if (!timeout_cb) return paused.set_state(ms);
+      const { wait_cb, reject, ctx_req } = ctx;
+      const { paused, wait_ms } = this.limiter;
+      const ms = wait_ms;
+      if (!wait_cb) return paused.set_state(ms);
 
       try {
         const { to_fm_req } = this.args;
         resp = resp instanceof Response ? resp.clone() : resp;
-        const ms = timeout_cb(resp, to_fm_req(ctx_req));
+        const ms = wait_cb(resp, to_fm_req(ctx_req));
         paused.set_state(ms);
       } catch (err) {
         reject(err);
@@ -585,7 +584,7 @@ export default class FetchManager<G extends fm.kind> {
       const req = to_fm_req(ctx_req);
       let new_req: fm.p.pager_cb_rtn<G>;
       try {
-        new_req = await pager_cb(resp.clone(), req, user);
+        new_req = await pager_cb(resp.clone(), req, user_collector);
       } catch (err) {
         reject(err);
       }
@@ -604,6 +603,15 @@ export default class FetchManager<G extends fm.kind> {
         resolve(resp_array);
       } catch (err) {
         reject(err);
+      }
+
+      function user_collector(payload: any[] | any, merge = true) {
+        if (Array.isArray(payload) && merge) {
+          payload.forEach((val) => user.push(val));
+          return;
+        }
+
+        user.push(payload);
       }
     },
   };
