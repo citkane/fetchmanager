@@ -145,7 +145,7 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 
 </details>
 
-### Trace
+## Trace
 The `trace_cb` is of the shape:
 ```ts
 (data: fm.trace_data) => void
@@ -199,20 +199,19 @@ const fetch_m = new FetchManager({
 
     ```
 
-
 </details>
+
 <details>
 <summary>Host definitions</summary>
-Host sets are defined as an Array in two, or a mix of two forms:
 
 A host is [as per specification](https://developer.mozilla.org/en-US/docs/Web/API/URL/host), the string returned by `URL.host`
 
+Host sets are defined as an Array in two, or a mix of two forms as below:
 ```ts
 [
     "foo.domain.com",
     "bar.domain.com"
 ]
-    
 ```
 
 In this form, fallback handlers are specified for "bar.domain.com"
@@ -227,11 +226,9 @@ In this form, fallback handlers are specified for "bar.domain.com"
         trace_cb?: fm.cb.trace,
     }
 ]
-
 ```
 
 </details>
-
 
 <details>
 <summary>Fetch</summary>
@@ -275,4 +272,5 @@ fetch_m({...Request}, {...options}, pager_cb)
 }
 
 ```
+
 </details>
