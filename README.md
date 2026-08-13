@@ -196,8 +196,7 @@ const fetch_m = new FetchManager({
         trace_cb?: fm.cb.trace,
     },
 }).fetch
-
-    ```
+```
 
 </details>
 
