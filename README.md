@@ -55,8 +55,8 @@ const bar = await fetch_m<bar_type["bar"]>(req, { response_cb }); // `bar` is no
  * b) Accept non-standard framework / module `RequestInit` shapes 
 
 ```ts
-// Specify the type of request:
-// <"url"> = { url: string; req_init?: RequestInit }, <"req"> = Request
+// Specify request form to callbacks, "url" | "req".
+// See later sections for more detail:
 const handlers: {
   retry_cb: fm.cb.retry<"url">;
   wait_cb: fm.cb.wait<"url">;
@@ -122,8 +122,8 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 ```ts
 const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
   const { next, data } = (await resp.json()) as bar_type;
-  if (!next) return;
   collect(data); //optional
+  if (!next) return;
   const url = new URL(req.url);
   url.searchParams.set("continue", next.continue);
   url.searchParams.set("sroffset", String(next.sroffset));
@@ -191,8 +191,8 @@ const fetch_m = new FetchManager({
     options?: {
         wait_ms?: number,           // Override the default retry wait in ms
         heartbeat?: number,         // Override the default queue heartbeat in ms
-        retry_cb?: fm.cb.retry<K>,  // Handlers are fallen back on as priority (3)
-        wait_cb?: fm.cb.wait<K>,
+        retry_cb?: fm.cb.retry<T>,  // Handlers are fallen back on as priority (3)
+        wait_cb?: fm.cb.wait<T>,
         trace_cb?: fm.cb.trace,
     },
 }).fetch
@@ -219,9 +219,9 @@ In this form, fallback handlers are specified for "bar.domain.com"
     "foo.domain.com",
     {
         host_string: "bar.domain.com",
-        response_cb?: fm.cb.resp<K>,    // Handlers are fallen back on as priority (2)
-        retry_cb?: fm.cb.retry<K>,
-        wait_cb?: fm.cb.wait<K>,
+        response_cb?: fm.cb.resp<T>,    // Handlers are fallen back on as priority (2)
+        retry_cb?: fm.cb.retry<T>,
+        wait_cb?: fm.cb.wait<T>,
         trace_cb?: fm.cb.trace,
     }
 ]
@@ -236,7 +236,9 @@ In order to cater for non-standard `RequestInit` forms, a request is defined as 
 - <`Request`> or
 - <`string`, `{...}` as RequestInit>
 
-`fetch_m(Request)` is thus effectively the same as `fetch_m("url", {...} as RequestInit)`, except you have the ability to pass non-standard options.
+Some callback handlers will expect to be informed of this request shape, which is typed as `<"url" | "req">` 
+
+`fetch_m(Request)` is effectively the same as `fetch_m("url", {...} as RequestInit)`, except you have the ability to pass non-standard options.
 For convenience this overload will be notated below as `<fm.req>`
 
 The anatomy of a fetch is thus ordered as follows:
@@ -264,12 +266,39 @@ fetch_m({...Request}, {...options}, pager_cb)
 {
     skip_queue?: boolean,           // Send this request to the front of the queue
     force_retry?: number,           // Retry this request x amount of times. -x to retry from the queue front 
-    response_cb?: fm.cb.resp<K>,    // Handlers here are first priority (1)
-    retry_cb?: fm.cb.retry<K>,
-    wait_cb?: fm.cb.wait<K>,
+    response_cb?: fm.cb.resp<T>,    // Handlers here are first priority (1)
+    retry_cb?: fm.cb.retry<T>,
+    wait_cb?: fm.cb.wait<T>,
     trace_cb?: fm.cb.trace,
 }
 
 ```
 
 </details>
+
+### Installation
+```bash
+bun install https://github.com/citkane/fetchmanager
+npm i https://github.com/citkane/fetchmanager
+```
+
+## More resources
+### Types
+FetchManager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you most of the documentation.
+### LibCallback
+A library of off the shelf callbacks to re-use:
+```ts
+
+import LibFetch from "fetchmanager/lib";
+const lib_fetch = new LibFetch();
+const wait_cb = lib_fetch.wait.backoff_factory()
+const retry_cb = lib_fetch.retry...
+...etc
+```
+
+### Demo
+Try a rather nifty WikiData explorer!
+```bash
+node ./demo/wikidata.js
+bun ./demo/wikidata/
+```
