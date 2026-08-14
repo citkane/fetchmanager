@@ -32,7 +32,7 @@ export default class FetchManager<G extends fm.kind> {
     const limiter: fm.p.limiter<fm.kind> = limiter_factory(...opts) as any;
     limiters.set(this.host_keys, limiter);
 
-    setInterval(dequeue, opts[4].heartbeat);
+    this.heartbeat = setInterval(dequeue, opts[4].heartbeat);
   }
 
   /* Overloads for wrapped `fetch` */
@@ -90,6 +90,19 @@ export default class FetchManager<G extends fm.kind> {
     const { url, req_init, req } = ctx.ctx_req;
     const req_clone = req ? req.clone() : undefined;
     return req_clone ? fetch(req_clone) : fetch(url!, req_init);
+  };
+
+  /* Kill a set of hosts and release their names for re-definiation */
+  public kill = async () => {
+    const { limiters } = FetchManager;
+    const { host_keys, limiter } = this;
+    clearInterval(this.heartbeat);
+    limiter.reqs.queue.forEach((req) =>
+      req.get_ctx().reject("Host group was killed"),
+    );
+    limiter.reqs.queue = [];
+    limiters.delete(host_keys);
+    return;
   };
 
   private queue_req = async (part_ctx: Partial<fm.p.ctx<G>>) => {
@@ -292,6 +305,7 @@ export default class FetchManager<G extends fm.kind> {
       });
       return user_options;
     },
+
     ident_req_kind: (req_or_url: string | Request) => {
       const req_kind: fm.kind | undefined =
         req_or_url instanceof Request && req_or_url.url.length
@@ -301,6 +315,7 @@ export default class FetchManager<G extends fm.kind> {
             : undefined;
       return req_kind;
     },
+
     fetch_overload_args: (
       req_kind: fm.kind,
       ...pms: fm.fol.fetch_pms<G>
@@ -362,13 +377,15 @@ export default class FetchManager<G extends fm.kind> {
       function is_option(v: any) {
         if (!v || v instanceof Function) return false;
         if (typeof v !== "object") return false;
-        const options: fm.opts.fetch<G> = {
-          response_cb: undefined,
-          trace_cb: undefined,
-          skip_queue: undefined,
-          force_retry: undefined,
-        };
-        return !!Object.keys(options).find((key) => Object.hasOwn(v, key));
+        const option_keys: (keyof fm.opts.fetch<G>)[] = [
+          "skip_queue",
+          "force_retry",
+          "response_cb",
+          "trace_cb",
+          "wait_cb",
+          "retry_cb",
+        ];
+        return option_keys.find((key) => Object.hasOwn(v, key));
       }
     },
 
@@ -648,6 +665,7 @@ export default class FetchManager<G extends fm.kind> {
   private host_keys: string[];
   private static_limiter?: fm.p.limiter<G>;
   private class_name = this.constructor.name;
+  private heartbeat: any = null;
 
   private static limiters = new Map<string[], fm.p.limiter<fm.kind>>();
   private static period_ms = (() => {
