@@ -12,9 +12,9 @@ A zero dependency wrapper around native Node / Bun `fetch` providing utility to 
 - [Instance destruction](#instance-destruction)
 - [Installation](#installation)
 - [More Resources](#more-resources)
-- [What about Deno?](#what-about-deno?)
-- [What about the browser?](#what-about-the-browser?)
-- [Why another fetch library?](#why-another-fetch-library?)
+- [What about Deno?](#what-about-deno)
+- [What about the browser?](#what-about-the-browser)
+- [Why another fetch library?](#why-another-fetch-library)
 - [Similar libraries](#similar-libraries)
 
 ## Basic usage
