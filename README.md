@@ -328,6 +328,9 @@ await stop_m();
 [top](#fetchmanager)
 ```bash
 bun install https://github.com/citkane/fetchmanager
+```
+
+```bash
 npm i https://github.com/citkane/fetchmanager
 ```
 
@@ -362,8 +365,6 @@ bun ./demo/wikidata/
 ```
 
 ## What about Deno?
-[top](#fetchmanager)
-
 I don't use Deno, so I haven't tried it there. It will probably work.
 
 ## What about the browser?
