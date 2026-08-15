@@ -7,12 +7,14 @@ A zero dependency wrapper around native Node / Bun `fetch` providing utility to 
 
 ### toc
 - [Basic Usage](#basic-usage)
+- [Core concepts](#core-concepts)
 - [Paging](#paging)
 - [Trace](#trace)
 - [Options and overloads](#options-and-overloads)
 - [Instance destruction](#instance-destruction)
 - [Installation](#installation)
 - [More Resources](#more-resources)
+- [Demo](#demo)
 - [What about Deno?](#what-about-deno)
 - [What about the browser?](#what-about-the-browser)
 - [Why another fetch library?](#why-another-fetch-library)
@@ -92,6 +94,8 @@ const baz = await fetch_m(
 ```
 
 ## Core concepts
+[top](#fetchmanager)
+
 FetchManager provides class instances acting on a unique set of one or more given [hosts](https://developer.mozilla.org/en-US/docs/Web/API/URL/host).
 Under the hood, it manages a (configurable) heartbeat driven request queue for each instance.
 Many instances can be created for unique sets of hosts. They will act independantly and in parallel, but hosts cannot overlap - 
@@ -161,6 +165,7 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 
 ## Trace
 [top](#fetchmanager)
+
 The `trace_cb` is of the shape:
 ```ts
 (data: fm.trace_data) => void
@@ -299,6 +304,7 @@ fetch_m(Request, {...options}, pager_cb)
 
 ## Instance destruction
 [top](#fetchmanager)
+
 It is possible to destroy an instance and then re-use the hosts that were wrapped. Two instance methods are provided:
 ### `FetchManager.kill`
 This will immediately stop processing the queue and all awaiting requests will be rejected with the message "Host group was killed".
@@ -342,7 +348,9 @@ const retry_cb = lib_fetch.retry...
 ### Tests
 Tests are made for, and run with the Bun framework. You can examine these to better understand the expectations for various aspects of the library.
 
-### Demo
+## Demo
+[top](#fetchmanager)
+
 Try a rather nifty WikiData explorer!
 ```bash
 node ./demo/wikidata.js
@@ -355,6 +363,7 @@ bun ./demo/wikidata/
 
 ## What about Deno?
 [top](#fetchmanager)
+
 I don't use Deno, so I haven't tried it there. It will probably work.
 
 ## What about the browser?
