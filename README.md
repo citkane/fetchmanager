@@ -5,6 +5,7 @@ A zero dependency wrapper around native Node / Bun `fetch` providing utility to 
 - paging
 - response data
 
+### toc
 - [Basic Usage](#basic-usage)
 - [Paging](#paging)
 - [Trace](#trace)
@@ -18,7 +19,7 @@ A zero dependency wrapper around native Node / Bun `fetch` providing utility to 
 - [Similar libraries](#similar-libraries)
 
 ## Basic usage
-
+[top](#fetchmanager)
 ### Initiate a Fetchmanager instance
 This will act upon a unique set of hosts.
 
@@ -125,6 +126,7 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 - default retry wait (independant of wait_cb, default 500ms)
 
 ## Paging
+[top](#fetchmanager)
 <details>
 <summary>Example</summary>
 ... Continued from previous example
@@ -158,6 +160,7 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 </details>
 
 ## Trace
+[top](#fetchmanager)
 The `trace_cb` is of the shape:
 ```ts
 (data: fm.trace_data) => void
@@ -193,7 +196,7 @@ type trace_data = {
 </details>
 
 ## Options and overloads
-
+[top](#fetchmanager)
 <details>
 <summary>Class initialiser</summary>
 
@@ -295,6 +298,7 @@ fetch_m(Request, {...options}, pager_cb)
 </details>
 
 ## Instance destruction
+[top](#fetchmanager)
 It is possible to destroy an instance and then re-use the hosts that were wrapped. Two instance methods are provided:
 ### `FetchManager.kill`
 This will immediately stop processing the queue and all awaiting requests will be rejected with the message "Host group was killed".
@@ -315,12 +319,14 @@ await stop_m();
 ```
 
 ## Installation
+[top](#fetchmanager)
 ```bash
 bun install https://github.com/citkane/fetchmanager
 npm i https://github.com/citkane/fetchmanager
 ```
 
 ## More resources
+[top](#fetchmanager)
 ### Types
 FetchManager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you helpful documentation.
 ### LibFetch
@@ -348,6 +354,7 @@ bun ./demo/wikidata/
 ```
 
 ## What about Deno?
+[top](#fetchmanager)
 I don't use Deno, so I haven't tried it there. It will probably work.
 
 ## What about the browser?
