@@ -101,6 +101,9 @@ Under the hood, it manages a (configurable) heartbeat driven request queue for e
 Many instances can be created for unique sets of hosts. They will act independantly and in parallel, but hosts cannot overlap - 
 ie. a host cannot be repeated in multiple instances. See later documentation on `FetchManager.stop` and `FetchManager.kill` for re-defining hosts.
 
+Host group contexts work on a single thread model, so for multi-threading models the user must manually ensure that hosts do not overlap.
+If they do, rate calculations will not be reliable.
+
 If and when rate / concurrency limits are reached for an instance, it's queue is paused until the limits are once again within allowances.
 Logic such as paging and adaptive retry strategies are managed by user provided callback handlers:
 - `retry_cb`: answers "*should I retry this failed request?*" with a boolean response,
@@ -379,3 +382,4 @@ It has dramatically reduced my app's boilerplating.
 - [axios-rate-limit](https://www.npmjs.com/package/axios-rate-limit)
 - [node-rate-limiter-flexible](https://github.com/animir/node-rate-limiter-flexible/wiki/Overall-example#third-party-api-crawler-bot-rate-limiting)
 - [limiter](https://www.npmjs.com/package/limiter)
+- [bottleneck](https://www.npmjs.com/package/bottleneck)
