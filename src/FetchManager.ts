@@ -83,16 +83,17 @@ export default class FetchManager<G extends fm.kind> {
     return queue_req(part_ctx);
   }
 
-  /**
-   * The native fetch implementation
-   * */
+  /* The native fetch implementation */
   private native_fetch = (ctx: fm.p.ctx<G>) => {
     const { url, req_init, req } = ctx.ctx_req;
     const req_clone = req ? req.clone() : undefined;
     return req_clone ? fetch(req_clone) : fetch(url!, req_init);
   };
 
-  /* Kill a set of hosts and release their names for re-definiation */
+  /**
+   * Immediately kill a set of hosts and release them for re-definition
+   * Awaiting requests will be rejected with the message "Host group was killed"
+   * */
   public kill = async () => {
     const { limiters } = FetchManager;
     const { host_keys, limiter } = this;
@@ -103,6 +104,18 @@ export default class FetchManager<G extends fm.kind> {
     limiter.reqs.queue = [];
     limiters.delete(host_keys);
     return;
+  };
+
+  /**
+   * Cleanly stop a set of hosts and release their names for re-definition
+   * The user must stop feeding the queue, else it will not stop.
+   * */
+  public stop = async () => {
+    const { limiter, stop, kill, heartbeat } = this;
+    if (limiter.reqs.queue.length)
+      return new Promise((res) => setTimeout(() => res(stop()), heartbeat));
+
+    return kill();
   };
 
   private queue_req = async (part_ctx: Partial<fm.p.ctx<G>>) => {
