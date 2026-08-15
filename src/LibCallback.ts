@@ -1,6 +1,6 @@
 /// <reference path="./types.d.ts" />
 
-export default class LibCallback<G extends fm.kind> implements fm.lib<G> {
+export default class LibCallback<G = fm.kind> implements fm.lib<G> {
   retry = {
     generic_factory: (
       retry_status: number[] = [429, 503],

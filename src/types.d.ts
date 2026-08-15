@@ -69,10 +69,7 @@ namespace fm {
      * @param fm_req {@link Request} || {@link p.req_url}
      * @returns `boolean` - true to retry, false to discard to error
      */
-    type retry<K extends kind> = (
-      resp: Response | Error,
-      fm_req: req<K>,
-    ) => boolean;
+    type retry<K = kind> = (resp: Response | Error, fm_req: req<K>) => boolean;
 
     /**
      *
@@ -84,10 +81,7 @@ namespace fm {
      * @param fm_req {@link Request} || {@link p.req_url}
      * @returns `number` in ms to wait for
      */
-    type wait<K extends kind> = (
-      resp: Response | Error,
-      fm_req: req<K>,
-    ) => number;
+    type wait<K = kind> = (resp: Response | Error, fm_req: req<K>) => number;
 
     /**
      *
@@ -96,7 +90,7 @@ namespace fm {
      * @param fm_req {@link Request} || {@link p.req_url}
      * @returns `any`
      */
-    type resp<K extends kind> = (resp: Response, fm_req: req<K>) => any;
+    type resp<K = kind> = (resp: Response, fm_req: req<K>) => any;
 
     /**
      *
@@ -129,7 +123,7 @@ namespace fm {
      * + The next page request: `Request | fm.p.req_url`
      * + To stop paging: `undefined | null` or just `return`
      */
-    type pager<K extends kind> = (
+    type pager<K = kind> = (
       resp: Response,
       fm_req: req<K>,
       collect: page_collector,
@@ -272,7 +266,7 @@ namespace fm {
   /**
    * Constructors for the callback library
    * */
-  type lib<K extends fm.kind> = {
+  type lib<K = fm.kind> = {
     retry: {
       [key: string]: fm.cb.resp<K> | ((...p: any[]) => fm.cb.resp<K>);
     };
