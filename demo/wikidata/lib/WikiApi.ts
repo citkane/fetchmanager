@@ -13,7 +13,7 @@ export class WikiApi {
     const { headers, api } = this;
     const url = new URL(api.action);
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 1000);
+    setTimeout(() => controller.abort(), 8000);
 
     url.search = params();
     if (next)
@@ -39,7 +39,7 @@ export class WikiApi {
   public explore = (topic: string) => {
     const { headers, api } = this;
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 1000);
+    setTimeout(() => controller.abort(), 8000);
     const url = new URL(`${api.entity}/${topic}.json`);
     return new Request(url, { headers, signal: controller.signal });
   };
