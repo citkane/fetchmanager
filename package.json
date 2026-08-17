@@ -13,5 +13,11 @@
     ".": "./src/FetchManager.ts",
     "./lib": "./src/LibCallback.ts"
   },
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "tests": "bun test --pool-1 --bail",
+    "build_demo": "bun build --minify --target=node --outfile=demo/wikidata.js demo/wikidata/",
+    "demo_node": "node demo/wikidata.js",
+    "demo_bun": "bun demo/wikidata/"
+  }
 }
