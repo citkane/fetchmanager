@@ -4,7 +4,7 @@ namespace fm {
    * # Host definition
    * Can be a string, or optionally an object including user callbacks for host level.
    */
-  type host<K extends kind> =
+  type host<K = kind> =
     | ({
         host_string: string;
       } & p.handlers<K>)
@@ -44,19 +44,41 @@ namespace fm {
    * # Data returned to user trace callback function for debugging
    * */
   type trace_data = {
-    message?: string; // Error messaging
-    paused?: number; // For how long is the queue paused in ms
-    stopped?: "queue empty" | "max concurrency"; // If the queue is not running, why?
-    rpp: number; // the current Request Per Period rate
-    rpp_max: number; // the max allowed rpp
-    rpp_period: period; // "sec" | "min" | "hr" | "day"
-    concurrency: number; // number of concurrent requests
-    max_concurrency: number; // max allowed concurrency
-    queue: number; // length of the queue
-    skip_queue: boolean; // is the current request prioritised?
-    force_retry: number; // How many times to retry left? (independent of retry_cb)
-    host_string: string; // host of current request
-    href: string; //href of current request
+    tokens: number;
+    message?: string;
+    paused?: number;
+    // stopped?: "queue empty" | "max concurrency" | "rate limit exceeded";
+    concurrency: number;
+    max_concurrency: number;
+    max_rpp: number;
+    period: period;
+    queue: number;
+    force_retry: number;
+    skip_queue: boolean;
+    host_string: string;
+    href: string;
+
+    // message?: string; // Error messaging
+    // paused?: number; // For how long is the queue paused in ms
+    // stopped?: "queue empty" | "max concurrency" | "rate limit exceeded"; // If the queue is not running, why?
+    // // rpp: number; // the current Request Per Period rate
+    // rpp_max: number; // the max allowed rpp
+    // rpp_period: period; // "sec" | "min" | "hr" | "day"
+    // concurrency: number; // number of concurrent requests
+    // max_concurrency: number; // max allowed concurrency
+    // queue: number; // length of the queue
+    // skip_queue: boolean; // is the current request prioritised?
+    // force_retry: number; // How many times to retry left? (independent of retry_cb)
+    // host_string: string; // host of current request
+    // href: string; //href of current request
+  };
+
+  type bucket = {
+    tokens: number;
+    concurrency: number;
+    period: period;
+    max_rpp: number;
+    max_concurrency: number;
   };
 
   /** # User defined callback functions */
@@ -179,7 +201,8 @@ namespace fm {
     type global<K extends kind> = {
       wait_ms?: number;
       heartbeat?: number;
-    } & fm.p.handlers<K>;
+      bucket?: bucket;
+    } & p.handlers<K>;
 
     /**
      *
@@ -320,22 +343,37 @@ namespace fm {
       hosts: { [hostname: string]: host<K> };
       reqs: limiter_reqs<K>;
       paused: limiter_paused;
-      rpp: limiter_rpp;
+      bucket: limiter_bucket;
+      // rpp: limiter_rpp;
     } & handlers<K>;
     type limiter_reqs<K extends fm.kind> = {
       queue: fetch_fn<K>[];
-      concurrency: number;
-      max_concurrency: number;
-      incr_concurrent: () => void;
-      decr_concurrent: () => void;
-      stop: () => boolean;
-      why_stopped: () => trace_data["stopped"];
+      // concurrency: number;
+      // max_concurrency: number;
+      // incr_concurrent: () => void;
+      // decr_concurrent: () => void;
+      is_stopped: () => boolean;
+      why_stopped: () => string | undefined;
     };
     type limiter_paused = {
       refr_state: () => boolean;
       set_state: (ms: number) => void;
-      state: () => boolean;
+      is_paused: () => boolean;
       ms: number;
+    };
+    type limiter_bucket = {
+      is_full: () => boolean;
+      // is_empty: () => boolean;
+      remove_token: () => void;
+      replace_token: () => void;
+      dec_concurrent: () => void;
+      inc_concurrent: () => void;
+      interval: any;
+      get: () => bucket;
+      set: (bucket: bucket) => void;
+      kill: () => void;
+      is_stopped: () => boolean;
+      why_stopped: () => string | undefined;
     };
     type limiter_rpp = {
       period: fm.period;

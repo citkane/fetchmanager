@@ -2,12 +2,14 @@
 
 export default class FetchManager<G extends fm.kind> {
   constructor(...opts: fm.opts.instance<G>) {
+    FetchManager.class_name = this.constructor.name;
     const default_opts = {
       wait_ms: 500,
       heartbeat: 20,
     };
     const { limiters } = FetchManager;
-    const { err, hosts, args, dequeue, limiter_factory } = this;
+    const { hosts, args, dequeue, limiter_factory } = this;
+    const { err } = FetchManager;
     const new_hosts: fm.host<G>[] = opts[3];
     if (!new_hosts.length) err.throw("No hosts given in constructor", opts);
 
@@ -22,11 +24,7 @@ export default class FetchManager<G extends fm.kind> {
 
     this.fetch = this.fetch.bind(this);
     this.host_keys = new_host_keys;
-    if (limiters.has(this.host_keys)) {
-      const mssg = "Host set was already defined. Previous options are used.";
-      err.warn(mssg, this.host_keys);
-      return;
-    }
+    if (limiters.has(this.host_keys)) return;
 
     opts[4] = args.constructor_opts(default_opts, ...opts);
     const limiter: fm.p.limiter<fm.kind> = limiter_factory(...opts) as any;
@@ -71,7 +69,10 @@ export default class FetchManager<G extends fm.kind> {
    * The wrapped native `fetch` method
    * */
   public fetch(this: FetchManager<G>, ...pms: fm.fol.fetch_pms<G>) {
-    const { queue_req, args, err } = this;
+    if (!this.limiter) return Promise.reject(Error("Host group was killed"));
+
+    const { queue_req, args } = this;
+    const { err } = FetchManager;
     const { fetch_overload_args, make_ctx, ident_req_kind } = args;
     const { reject } = err;
     const req_or_url: string | Request = pms[0];
@@ -98,11 +99,13 @@ export default class FetchManager<G extends fm.kind> {
     const { limiters } = FetchManager;
     const { host_keys, limiter } = this;
     clearInterval(this.heartbeat);
-    limiter.reqs.queue.forEach((req) =>
-      req.get_ctx().reject("Host group was killed"),
-    );
-    limiter.reqs.queue = [];
+    limiter?.bucket.kill();
+    limiter?.reqs.queue.forEach((req) => {
+      const { reject } = req.get_ctx();
+      reject(Error("Host group was killed"));
+    });
     limiters.delete(host_keys);
+    delete this.static_limiter;
     return;
   };
 
@@ -111,15 +114,20 @@ export default class FetchManager<G extends fm.kind> {
    * The user must stop feeding the queue, else it will not stop.
    * */
   public stop = async () => {
-    const { limiter, stop, kill, heartbeat } = this;
-    if (limiter.reqs.queue.length)
-      return new Promise((res) => setTimeout(() => res(stop()), heartbeat));
-
-    return kill();
+    const { limiter, kill, heartbeat } = this;
+    return new Promise<void>((res) => {
+      poll();
+      function poll() {
+        return limiter.reqs.queue.length
+          ? setTimeout(() => poll(), heartbeat / 2)
+          : kill().then(() => res());
+      }
+    });
   };
 
   private queue_req = async (part_ctx: Partial<fm.p.ctx<G>>) => {
-    const { fetch_factory, unshift_queue, push_queue, err } = this;
+    const { fetch_factory, unshift_queue, push_queue } = this;
+    const { err } = FetchManager;
     const { skip_queue, host_string, resolve } = part_ctx;
     const full_ctx = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
     if (full_ctx) {
@@ -141,18 +149,17 @@ export default class FetchManager<G extends fm.kind> {
 
   private dequeue = () => {
     const { limiter, handle } = this;
-    const { reqs, paused, rpp } = limiter;
-    const is_stopped = reqs.stop(),
-      is_throttled = rpp.throttle(),
-      is_paused = paused.refr_state();
+    const { reqs, paused, bucket } = limiter;
+    const is_paused = paused.refr_state();
 
     const ctx = reqs.queue[0]?.get_ctx();
-    if (ctx) setTimeout(() => handle.trace(ctx));
-    if (is_stopped || is_throttled || is_paused) return;
+    if (reqs.is_stopped() || bucket.is_stopped() || is_paused)
+      return !!ctx ? handle.trace(ctx) : undefined;
 
     const { execute_fetch } = reqs.queue.shift()!;
-    rpp.increment();
-    reqs.incr_concurrent();
+    bucket.remove_token();
+    bucket.inc_concurrent();
+    handle.trace(ctx!);
     execute_fetch();
   };
 
@@ -169,7 +176,7 @@ export default class FetchManager<G extends fm.kind> {
   private fetch_factory = (ctx: fm.p.ctx<G>): fm.p.fetch_fn<G> => {
     const { response_cb, pager_cb, resolve, reject, ctx_req } = ctx;
     const { limiter, handle, args, native_fetch } = this;
-    const { reqs } = limiter;
+    const { bucket } = limiter;
     const { pager, error } = handle;
     const { to_fm_req } = args;
     return {
@@ -182,10 +189,11 @@ export default class FetchManager<G extends fm.kind> {
       try {
         resp = await native_fetch(ctx);
       } catch (err) {
-        reqs.decr_concurrent();
+        bucket.dec_concurrent();
+        bucket.replace_token();
         return error(ctx, err as Error);
       }
-      reqs.decr_concurrent();
+      bucket.dec_concurrent();
       if (!resp.ok) return error(ctx, resp);
       if (pager_cb) return pager(ctx, resp, pager_cb);
       if (!response_cb) return resolve(resp);
@@ -203,23 +211,24 @@ export default class FetchManager<G extends fm.kind> {
   private limiter_factory = (
     max_rpp: number,
     max_concurrency: number,
-    rpp_period: fm.period,
+    period: fm.period,
     fm_hosts: fm.host<G>[],
     options?: fm.opts.global<G>,
   ): fm.p.limiter<G> => {
-    const { handle, err } = this;
+    const { handle } = this;
+    const { err } = FetchManager;
     const hosts = this.hosts.fm_to_ctx_hosts(fm_hosts);
     const { response_cb, retry_cb, wait_cb, trace_cb } = options!;
-    const reqs = reqs_factory(max_concurrency);
+    const reqs = reqs_factory();
     const paused = paused_factory(options!);
-    const rpp = rpp_factory(rpp_period, max_rpp);
+    const bucket = bucket_factory();
 
     return {
       wait_ms: options!.wait_ms!,
       hosts,
       reqs,
       paused,
-      rpp,
+      bucket,
       response_cb,
       retry_cb,
       wait_cb,
@@ -230,13 +239,13 @@ export default class FetchManager<G extends fm.kind> {
       const { warn } = err;
       const { trace } = handle;
       const { heartbeat } = options;
-      const paused = { set_state, refr_state, state, ms: 0 };
+      const paused = { set_state, refr_state, is_paused, ms: 0 };
       return paused;
 
       function refr_state() {
         paused.ms = paused.ms ? paused.ms - heartbeat! : 0;
         paused.ms = paused.ms < 0 ? 0 : paused.ms;
-        return state();
+        return is_paused();
       }
       function set_state(ms: number) {
         if (!ms) return;
@@ -249,59 +258,116 @@ export default class FetchManager<G extends fm.kind> {
         const ctx = reqs.queue[0]?.get_ctx();
         if (ctx) trace(ctx, `Fetch is paused for ${paused.ms}ms`);
       }
-      function state() {
+      function is_paused() {
         return paused.ms > 0;
       }
     }
 
-    function reqs_factory(max_concurrency: number): fm.p.limiter_reqs<G> {
-      const reqs = {
+    function reqs_factory(): fm.p.limiter_reqs<G> {
+      return {
         queue: [],
-        concurrency: 0,
-        max_concurrency,
-        incr_concurrent,
-        decr_concurrent,
-        stop,
+        is_stopped,
         why_stopped,
       };
-      return reqs;
 
-      function incr_concurrent() {
-        reqs.concurrency++;
-      }
-      function decr_concurrent() {
-        reqs.concurrency--;
-      }
-      function stop() {
-        if (!reqs.queue.length) return true;
-        return reqs.concurrency >= reqs.max_concurrency;
+      function is_stopped() {
+        return !reqs.queue.length;
       }
       function why_stopped() {
-        if (!stop()) return undefined;
-        return !reqs.queue.length ? "queue empty" : "max concurrency";
+        if (!is_stopped()) return bucket.why_stopped();
+        return "queue empty";
       }
     }
 
-    function rpp_factory(period: fm.period, max: number): fm.p.limiter_rpp {
-      const rpp_period_ms = FetchManager.period_ms[period];
-      const rpp_tracker: number[] = [];
-      const rpp = { rate: 0, max, period, throttle, increment };
-      return rpp;
-      function throttle() {
-        rpp.rate = calc_rpp();
-        return rpp.rate >= max;
-      }
-      function increment() {
-        const now = new Date().valueOf();
-        rpp_tracker.push(now);
-      }
-      function calc_rpp() {
-        const period_ago = new Date().valueOf() - rpp_period_ms;
-        const index = rpp_tracker.findIndex((time) => time > period_ago);
-        if (index === -1) return rpp_tracker.length;
+    function bucket_factory(): fm.p.limiter_bucket {
+      const ms = FetchManager.period_ms[period];
+      const interval_ms = Math.ceil(ms / max_rpp);
+      const interval = setInterval(() => add(), interval_ms);
+      let bucket: fm.bucket = {
+        max_concurrency,
+        max_rpp,
+        period,
+        tokens: max_rpp,
+        concurrency: 0,
+      };
+      return {
+        interval,
+        is_full,
+        is_stopped,
+        why_stopped,
+        remove_token,
+        replace_token,
+        inc_concurrent,
+        dec_concurrent,
+        get,
+        set,
+        kill,
+      };
 
-        rpp_tracker.splice(0, index);
-        return rpp_tracker.length;
+      function set(new_bucket: fm.bucket) {
+        if (new_bucket.period !== period)
+          return err.throw("periods must match", {
+            have: period,
+            got: new_bucket.period,
+          });
+        if (new_bucket.max_rpp !== max_rpp)
+          return err.throw("max_rpp must match", {
+            have: max_rpp,
+            got: new_bucket.max_rpp,
+          });
+        if (new_bucket.max_concurrency !== max_concurrency)
+          return err.throw("max_concurrency must match", {
+            have: max_concurrency,
+            got: new_bucket.max_concurrency,
+          });
+        if (new_bucket.concurrency > max_concurrency)
+          new_bucket.concurrency = max_concurrency;
+        if (new_bucket.tokens > max_rpp) new_bucket.tokens = max_rpp;
+        const { tokens, concurrency } = new_bucket;
+        if (tokens < bucket.tokens) bucket.tokens = tokens;
+        if (concurrency > bucket.concurrency) bucket.concurrency = concurrency;
+      }
+
+      function get() {
+        return bucket;
+      }
+
+      function is_full() {
+        return bucket.tokens >= max_rpp;
+      }
+
+      function is_stopped() {
+        return bucket.concurrency >= max_concurrency || !bucket.tokens;
+      }
+
+      function why_stopped() {
+        if (bucket.concurrency >= max_concurrency) return "max concurrency";
+        if (!bucket.tokens) return "rate limit exceeded";
+      }
+      function remove_token() {
+        if (!bucket.tokens) return;
+        bucket.tokens--;
+      }
+
+      function replace_token() {
+        add();
+      }
+      function inc_concurrent() {
+        bucket.concurrency++;
+      }
+
+      function dec_concurrent() {
+        if (!bucket.concurrency) return err.warn("No concurrency to decrease");
+        bucket.concurrency--;
+      }
+
+      function add() {
+        if (is_full()) return;
+        bucket.tokens++;
+      }
+
+      function kill() {
+        clearInterval(interval);
       }
     }
   };
@@ -473,17 +539,18 @@ export default class FetchManager<G extends fm.kind> {
   private hosts = {
     make_debug_data: (ctx: fm.p.ctx<G>, mssg?: string): fm.trace_data => {
       const { force_retry, host_string, skip_queue } = ctx;
-      const { rpp, reqs, paused } = this.limiter;
+      const { bucket, reqs, paused } = this.limiter;
       const href = this.hosts.href(ctx);
+      const { max_concurrency, concurrency, max_rpp, tokens, period } =
+        bucket.get();
       return {
-        message: mssg,
+        tokens,
+        message: mssg || reqs.why_stopped(),
         paused: paused.ms,
-        stopped: reqs.why_stopped(),
-        rpp: rpp.rate,
-        rpp_max: rpp.max,
-        rpp_period: rpp.period,
-        concurrency: reqs.concurrency,
-        max_concurrency: reqs.max_concurrency,
+        concurrency,
+        max_concurrency,
+        max_rpp,
+        period,
         queue: reqs.queue.length,
         force_retry,
         skip_queue,
@@ -500,7 +567,7 @@ export default class FetchManager<G extends fm.kind> {
     },
 
     fm_to_ctx_hosts: (hosts: fm.host<G>[]) => {
-      const { err } = this;
+      const { err } = FetchManager;
       return hosts.reduce(
         reducer,
         {} as { [host_string: string]: fm.p.host<G> },
@@ -540,7 +607,8 @@ export default class FetchManager<G extends fm.kind> {
   private handle = {
     error: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
       const { retry, trace, should_retry } = this.handle;
-      const { hosts, err } = this;
+      const { hosts } = this;
+      const { err } = FetchManager;
       const href = hosts.href(ctx);
       const mssg =
         resp instanceof Response
@@ -646,26 +714,51 @@ export default class FetchManager<G extends fm.kind> {
     },
   };
 
-  private err = {
+  private static class_name: string;
+  private static err = {
     message: (mssg: string) => {
       return `[${this.class_name}] ${mssg}`;
     },
 
-    reject: (mssg: string, ...warn: any[]) => {
-      if (warn && warn.length) this.err.warn(mssg, ...warn);
+    reject: (mssg: string, ...reasons: any[]) => {
+      // if (warn && warn.length) this.err.warn(mssg, ...warn);
       mssg = this.err.message(mssg);
-      return new Promise((_res, rej) => rej(mssg));
+      const err = Error(mssg, { cause: reasons });
+      return new Promise((_res, rej) => rej(err));
     },
 
     throw: (mssg: string, ...details: any[]) => {
-      const cause = { message: mssg, details };
-      throw Error(this.err.message(mssg), { cause });
+      throw Error(this.err.message(mssg), { cause: details });
     },
 
     warn: (mssg: string, ...data: any[]) => {
       mssg = this.err.message(mssg);
       console.warn(mssg, ...data);
     },
+  };
+
+  public static bucket = {
+    get: (host: string) => {
+      const group = this.get_group(host);
+      return group ? this.limiters.get(group)!.bucket.get() : undefined;
+    },
+
+    set: (host: string, bucket: fm.bucket) => {
+      const group = this.get_group(host);
+      if (!group)
+        return this.err.throw("No host group found", host, {
+          groups: this.limiters.keys(),
+        });
+
+      const limiter = this.limiters.get(group)!;
+      limiter.bucket.set(bucket);
+    },
+  };
+
+  private static get_group = (host: string) => {
+    const host_groups = this.limiters.keys();
+    const group = host_groups.find((group) => group.includes(host));
+    return group;
   };
 
   private get limiter() {
@@ -677,7 +770,6 @@ export default class FetchManager<G extends fm.kind> {
 
   private host_keys: string[];
   private static_limiter?: fm.p.limiter<G>;
-  private class_name = this.constructor.name;
   private heartbeat: any = null;
 
   private static limiters = new Map<string[], fm.p.limiter<fm.kind>>();
