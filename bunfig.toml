@@ -1,0 +1,4 @@
+[test]
+# Always enable coverage
+coverage = true
+coveragePathIgnorePatterns = ["demo/**", "test/**", "src/LibCallback.ts"]
