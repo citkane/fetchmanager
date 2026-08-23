@@ -87,7 +87,7 @@ describe("basic functionality", () => {
     }
   });
 
-  test.only("it gets all buckets", async () => {
+  test("it gets all buckets", async () => {
     const fm = new FetchManager(10, 3, "sec", ["localhost:3000"]);
     expect(FetchManager.buckets[fm.uid]).toEqual({
       uid: "d18909e7",
