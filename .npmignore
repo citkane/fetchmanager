@@ -2,7 +2,7 @@
 node_modules
 .git
 test
-bunconfig.toml
+bunfig.toml
 demo/browser
 demo/wikidata
 
