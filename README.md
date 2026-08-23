@@ -5,20 +5,21 @@ A zero dependency wrapper around native Javascript `fetch` providing management 
 - paging
 - response data
 
-Tested for Node and Bun.
+For Node, Bun and the broowser (and probably Deno too).
 
 - [Basic Usage](#basic-usage)
 - [Core concepts](#core-concepts)
 - [Paging](#paging)
 - [Trace](#trace)
+- [Aborting](#aborting)
 - [Options and overloads](#options-and-overloads)
+- [Advanced Usage](#advanced-usage)
 - [Distributed architectures](#distributed-architectures)
 - [Instance destruction](#instance-destruction)
 - [Installation](#installation)
 - [More Resources](#more-resources)
 - [Demo](#demo)
 - [What about Deno?](#what-about-deno)
-- [What about the browser?](#what-about-the-browser)
 - [Why another fetch library?](#why-another-fetch-library)
 - [Similar libraries](#similar-libraries)
 
@@ -86,7 +87,7 @@ const handlers: {
 
 const baz = await fm.fetch(
     "https://baz.domain.com/api/endpoint",
-    /* If the global `RequestInit` type definition is not compliant, then you can fool TS typing
+    /* If the global `RequestInit` type definition is not compliant, then force TS typing
      * Ensure that your global `fetch` is capable of accepting the non-standard shape */
     { tls: { rejectUnauthorized: false } } as RequestInit, 
     handlers,
@@ -108,7 +109,7 @@ See later documentation on:
 - `FetchManager.stop` and `FetchManager.kill` methods for re-defining targets.
 - `FetchManager.bucket.get` and `FetchManager.bucket.set` methods for orchestration.
 
-Caching and orchestration frameworks are outside the scope of this library, and left to the user to implement.
+Caching and orchestration frameworks are outside the scope of this library, and left to the user to implement their own.
 
 If and when rate / concurrency limits are reached for an instance, it's queue is paused until the limits are once again within allowances.
 Logic such as paging and adaptive retry strategies are managed by user provided callback handlers:
@@ -119,12 +120,12 @@ Logic such as paging and adaptive retry strategies are managed by user provided 
 - `trace_cb`: provides diagnostic data about the state of the queue.
 
 Handlers (excepting trace) are injected with the `Response | Error` as well as the request in it's given shape: (see the `fm.req` type).
-The pager_cb is injected with an additional (optional) `collect` function to facilitate flattening the final data return. 
+The pager_cb is injected also with an (optional) `collect` function to facilitate flattening the final data return. 
 
-Handlers (excepting pager) can be set at 3 cascading levels of priority:
+Handlers can be set at 3 cascading levels of priority (excepting pager):
 1) per individual request
 2) at class instantiation per individual target
-3) at class instantiation for the whole target set.
+3) at class instantiation for the whole target group.
 
 Behaviour can thus be set globally, and overidden granularly. Paging is set on a per request basis.
 Fetch Manger is not very opinionated. It is up to the user to build a re-usable kit of callback handlers to manage their application logic.
@@ -157,10 +158,10 @@ const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
 };
 
 const req = new Request("https://bar.domain.com/api/paged")
-const all_data = await fetch_m<bar_type["data"][]>(req, pager_cb);
+const all_data = await fm.fetch<bar_type["data"][]>(req, pager_cb);
 ```
 
-`pager_cb` will cause `fetch_m` to always return an `Array`.
+`pager_cb` will cause `fm.fetch` to always return an `Array`.
 
 In the above example, we used the `collect` utility function. It is slightly opinionated. If `data` is `any[]`,
 then it will flatten the paged results so that `all_data` is also `any[]`.
@@ -206,6 +207,52 @@ type trace_data = {
 ```
 </details>
 
+## Aborting
+Native Javascript `fetch` uses [signals](https://developer.mozilla.org/en-US/docs/Web/API/Request/signal) to manage user controlled aborts.
+This is compatible with Fetch Manager, eg.
+```ts
+let count = 0;
+const controller = new AbortController();
+const { signal } = controller;
+signal.addEventListener("abort", () => console.log("abort", count));
+const response_cb: fm.cb.resp = (resp, _req) => {
+    count ++;
+    if(count > 1) controller.abort()
+    return resp.ok;
+}
+
+const promises = [...Array(4)].map(
+    () => fm.fetch("https://foo.com", { signal }, { response_cb })
+        .catch(() => false);
+);
+const two_of_four = await Promise.all(promises) // returns [true, true, false, false] and logs "abort 2"
+```
+
+However, because Fetch Manager is queing requests for unknown lengths of time,
+using the native [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) method at the user call will lead to unexpected timing results.
+For this purpose, you can set the `abort_timeout` option (in ms) at three levels of priority:
+- Per request, in the `fm.fetch` properties object (priority 1)
+- Default for a target in it's class initialiser options (priority 2)
+- Default for all targets in the class initialiser options (priority 3)
+
+For example, to set it for a request:
+```ts
+
+const controller = new AbortController();
+const { signal } = controller;
+const req = new Request("https://foo.com", { signal });
+const resp = await fm.fetch(req, { abort_timeout: 1000 }) // Will abort if the request takes longer than 1000ms
+    .catch((err) => console.error(err.name))              // "TimeoutError" or "AbortError" 
+
+// ...Do stuff that consumes time...
+
+controller.abort();
+```
+
+Fetch Manager will add the timeout signal just in time before the request is sent.
+The user signal will also be available.
+
+
 ## Options and overloads
 [top](#fetchmanager)
 
@@ -219,15 +266,32 @@ const fm = new FetchManager({
     options?: {
         wait_ms?: number,                   // Override the default (500) retry wait in ms
         heartbeat?: number,                 // Override the default (20) queue heartbeat in ms
-    /* Handlers defined here are 
+    /* Options defined hereunder are 
      * fallen back on as priority (3) */
+        abort_timeout?: number,             // Number of ms after request is sent until abort
         retry_cb?: fm.cb.retry,             
         wait_cb?: fm.cb.wait,
         trace_cb?: fm.cb.trace,
     },
 })
-```
 
+```
+If a bucket for the instance is available, that can be used to initialise an instance, thus preserving or migrating the state of limits:
+```ts
+const bucket = FetchManager.bucket.get(fm.uid);
+save_to_file(bucket)
+
+// Server restarts
+
+const bucket: fm.bucket = get_from_file(bucket)
+const fm = new FetchManager({
+    bucket,
+    targets: [...],
+    options?: {...}
+})
+
+```
+The bucket must match the targets, ie. the uid hash of the bucket must align with the targets definition else an error will be thrown.
 
 ### Target definitions
 
@@ -250,13 +314,15 @@ Target sets are defined as an Array in two, or a mix of two shape as below:
 ]
 ```
 
-In the shape below, fallback handlers are specified for "bar.domain.com"
+In the shape below, fallback options are specified for "bar.domain.com"
 ```ts
 [
     "foo.domain.com",
     {
-        host_string: "bar.domain.com",
-    /* Handlers defined here are fallen back on as priority (2) */
+        target_key: "bar.domain.com",
+        /* Options defined hereunder are
+        fallen back on as priority (2) */
+        abort_timeout?: number,              // Number of ms after request is sent until abort
         response_cb?: fm.cb.resp,       
         retry_cb?: fm.cb.retry,
         wait_cb?: fm.cb.wait,
@@ -265,33 +331,34 @@ In the shape below, fallback handlers are specified for "bar.domain.com"
 ]
 ```
 
-It is important that targets are only defined once across all instances. In a single thread environment,
-errors will be thrown - but maintainers of distributed systems should be mindful of the following scenario when orchestrating:
+It is important that a target is only defined once across all instances. Fetch Manager in a single thread environment 
+will throw errors on conflicts - but orchestrators of distributed systems should be mindful of this,
+and more complex scenarios such as the following:
 
 instance_1 target defined as:
 ```ts
 ["foo.com"]
 ```
-This will catch all API endpoints for foo.com, but it may have endpoints with different rate limits, so we do:
+This will catch all API endpoints for foo.com, but foo.com may have endpoints with different rate limits, so we can do:
 
 instance_2 target defined as:
 ```ts
 ["foo.com/api/special"]    
 ```
 Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, it's limit rules are implemented on `instance_2`.
-In a single threaded environment, this request will throw an error.
+In a single threaded environment, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be flagged externally.
 
 ### Fetch
 In order to cater for non-standard `RequestInit` forms, a request can be defined as one of two shapes:
 - <`Request`> or
 - <`string`, `{...}` as RequestInit>
 
-`fm.fetch(Request)` is effectively the same as `fm.fetch("url", {...} as RequestInit)`, except you have the ability to pass non-standard options which `new Request` would otherwise reject.
-For convenience this overload will be notated below as `<fm.req>`
+`fm.fetch(Request)` is effectively the same as `fm.fetch("url", {...} as RequestInit)`, except you have the ability to pass non-standard options
+which native `new Request` would otherwise reject. For convenience this overload will be notated below as `<fm.req>`
 
 The anatomy of a fetch is thus ordered as follows:
 ```ts
-fm.fetch<optional>(<fm.req>, options?, pager_cb?)
+fm.fetch(<fm.req>, options?, pager_cb?)
 ```
 
 This translates to a number of overloaded shapes:
@@ -310,12 +377,14 @@ fm.fetch(Request, {...options}, pager_cb)
 ```
 
 ### Fetch user options
+Options passed directly to fm.fetch are priority (1). They will override any options set at individual target level (2) or target group level (3).
 ```ts
 {
     skip_queue?: boolean,           // Send this request to the front of the queue
     force_retry?: number,           // Retry this request x amount of times. -x to retry from the queue front 
-/* Handlers defined here 
- * are first priority (1) */
+    /* Options defined hereunder 
+     * are first priority (1) */
+    abort_timeout?: number,         // Number of ms after request is sent until abort
     response_cb?: fm.cb.resp,              
     retry_cb?: fm.cb.retry,         // retry_cb always retries from the front of the queue
     wait_cb?: fm.cb.wait,
@@ -323,7 +392,6 @@ fm.fetch(Request, {...options}, pager_cb)
 }
 
 ```
-
 
 ## Advanced usage
 [top](#fetchmanager)
@@ -340,7 +408,7 @@ const important = fm.fetch("http://foo.com/api/important", {skip_queue: true})
 `important` will now be fetched before `normal`
 
 ### force_retry
-This option is by nature quirky and opinionated
+This option is by nature quirky and opinionated. The examples below will illustrate.
 ```ts
 const buggy_endpoint = fm.fetch("http://foo.com/api/buggy", {force_retry: 5})
 const important_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.com/api/stuff")))
@@ -350,7 +418,7 @@ If `buggy_endpoint` fails for any reason, it will be re-tried for up to 5 times 
 All of `important_stuff` will thus be requested before `buggy_endpoint` retries.
 There are some quirks to this behaviour:
 - If the default retry wait is set to 500ms, `important_stuff` will proceed immediately and not wait on the buggy failure.
-- If `important_stuff` consumes 300ms to make it's requests, then `buggy_endpoint` will wait the remaining 200ms before retrying.
+- If `important_stuff` consumes 300ms to complete it's requests, then `buggy_endpoint` will wait the remaining 200ms before retrying.
 - if the user has provided `wait_cb`, and it returns eg. 1000ms (maybe a rate limit is being imposed) - then the whole queue, including `important_stuff`, will wait for 1000ms
 
 We can also do the inverse, and prioritise request retries to the front of the queue.
@@ -360,7 +428,7 @@ const normal_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.
 ```
 
 Note the negative (-5). `buggy_important` will now retry up to five times from the front of the queue before `normal_stuff` is requested.
-If the buggy endpoint takes longer to respond (or error) than the queue pause time, then `normal_stuff` will fill in the gap with requests.
+If the buggy endpoint takes longer to respond (or error) than the retry wait time, then `normal_stuff` will fill in the gaps with requests.
 
 Consider `force_retry` as an override to prioritise / de-prioritise a single request. A user provided `retry_cb` will be by-passed until all the `force_retry` counts have been depleted.
 
@@ -368,39 +436,49 @@ Consider `force_retry` as an override to prioritise / de-prioritise a single req
 [top](#fetchmanager)
 
 In a single thread, Fetch Manager will error and warn on conflicts between instances.
-In a distributed system, rates and limits will have to be orchestrated at a higher level.
+In a distributed system, the tracking of rates and limits state will have to be orchestrated at a higher level.
 
-Fetch Manager does not in and of itself provide orchestration tooling, but it does expose helpers to provide the needed data.
-A bucket contains the limits and current rates for a target group
+Fetch Manager does not in and of itself provide orchestration tooling, but it does expose helpers to access and set the needed data.
+A bucket contains the limits and current rates for a target group. It is linked to a class instance (a group of targets) by it's hash uid.
+- `fm.uid`                                          - Instance uid (it's a hash of target keys sorted longest to shortest) 
+- `FetchManager.buckets`                            - Static map of uid keyed buckets
 - `FetchManager.bucket.get(uid_or_target)`          - Get a bucket
 - `FetchManager.bucket.set(uid_or_target, bucket)`  - Set a bucket
-- `fm.uid`                                          - Instance uid (Md5 hash of target keys sorted longest to shortest) 
-- `FetchManager.targets`                            - Static map of uid keyed target groups
+- `FetchManager.targets`                            - Static map of uid keyed target key groups
+- `FetchManager.hash(targets: fm.target[])`         - Create a uid and sorted array of target keys from a target group.
 
-A naive, illustrative pseudo-example could look like this:
+A naive, illustrative pseudo-example for orchestration could look like this:
 ```ts
-const uid = fm.uid;
-const bucket = FetchManager.bucket.get(uid)
-your_orchestration.publish("update", uid, bucket)
+// source thread
+const all_targets = FetchManager.targets
+const buckets = FetchManager.buckets
+your_orchestration.publish("update", all_targets, buckets)
 
-const uids = Object.keys(FetchManager.targets)
-uids.forEach(uid => {
-    const bucket = FetchManager.bucket.get(uid)
-    your_orchestration.publish("update", uid, bucket)
-})
 ```
 ```ts
-your_orchestration.on("update", (uid: string, bucket: fm.bucket) => {
-    if(!bucket.time) return; //bucket was created, but no requests have been made
+// destination thread
 
-    const ex_bucket = FetchManager.bucket.get(uid);
-    bucket.tokens = Math.min(bucket.tokens, ex_bucket.tokens)
-    bucket.concurrency = Math.max(bucket.concurrency, ex_bucket.concurrency)
-    FetchManager.bucket.set(uid, bucket)
-)
+const fm: { [uid: string]: InstanceType<FetchManager> } = {...}
+const fm_targets: { [uid: string]: fm.target[] } = {...}
+const fm_options: { [uid:string]: fm.opts.global<fm.kind>} ] = {...}
+
+your_orchestration.on("update", (all_targets, buckets) => {
+    Object.entries(buckets).forEach(([uid, bucket]) => {
+        const targets = fm_targets[uid] || all_targets[uid]!;
+        const options = fm_options[uid] || {};
+        if(!fm[uid]) return (fm[uid] = new FetchManager(bucket, targets, options));
+    
+        const ex_bucket = FetchManager.bucket.get(uid)!;
+        bucket.tokens = Math.min(bucket.tokens, ex_bucket.tokens);
+        bucket.concurrency = Math.max(bucket.concurrency, ex_bucket.concurrency);
+        FetchManager.bucket.set(uid, bucket);
+    )}
+)}
 ```
 
-Buckets are of the shape:
+<details>
+<summary>bucket details</summary>
+
 ```ts
 
   type bucket = {
@@ -414,12 +492,16 @@ Buckets are of the shape:
   };
 ```
 
-Once a bucket is set, only `tokens` and `concurrency` can be updated. It is up to the user to validate:
+Once a bucket is set, only `tokens` and `concurrency` can be updated. `time` will be `0` until the first request is made on a new bucket.
+
+When orchestrating, it is up to the user to validate:
 - That new values are less favourable than the existing values (the local limiter will be adjusting them favourably)
 - That timestamps are within tolerance
 - That new buckets are created with the same limits across the entire system.
 
-If limit settings across a distributed system differ, then rate calculations will be corrupted.
+</details>
+
+If limit settings across a distributed system differ, then global rate calculations will be corrupted.
 
 ## Instance destruction
 [top](#fetchmanager)
@@ -441,18 +523,20 @@ const fm = new FetchManager(..., hosts: [...]);
 /* Application does stuff with fm */
 await fm.stop();
 /* Targets can now be re-used in new instances */
+
 ```
+
+To cancel in-flight requests, the user should set up an `AbortSignal` and call it from their application code.
 
 ## Installation
 [top](#fetchmanager)
 ```bash
-bun install fetch-man # NPM
-bun install https://github.com/citkane/fetchmanager
-```
+bun i fetch-man # NPM
+bun i citkane/fetchmanager#v0.1.0 #Github
 
-```bash
 npm i fetch-man # NPM
-npm i https://github.com/citkane/fetchmanager
+npm i citkane/fetchmanager#v0.1.0 #Github
+
 ```
 
 ## More resources
@@ -485,18 +569,14 @@ node --run=wikidata
 
 ```bash
 bun ./demo/wikidata/
-
 ```
 
 ## What about Deno?
-I don't use Deno, so I haven't tried it with this library. It will probably work.
-
-## What about the browser?
-I haven't needed that yet. If you build the TS with a browser target, it will probably work.
+I don't use Deno, so I am not familiar with it's ecosystem and haven't tried Fetch Manager on it. It will probably work.
 
 ## Why another `fetch` library?
-Because my attention span is rather limited... While working on an application that aggragates data from a number of API's with different rate rules and paging logic,
-I wanted something specific with zero dependencies. I wanted it to be as close to the native `fetch` syntax as possible. The result is this library.
+Because my attention span is rather limited... While working on an application that aggregates data from a number of API's with different rate rules and paging logic,
+I wanted something with zero dependencies that is as close to the native `fetch` syntax as possible. The result is this library.
 It has dramatically reduced my app's boilerplating.
 
 ## Similar libraries:
