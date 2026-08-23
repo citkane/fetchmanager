@@ -149,13 +149,15 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 /* We inform the callback of the request shape, `<"req" | "url">`
  * so that the `req` parameter type is disambiguated. */ 
 const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
-  const { next, data } = (await resp.json()) as bar_type;
-  collect(data);                        // optional - overrides `response_cb` and flattens the resolved result
-  if (!next) return;                    // return nullish if no more data is expected
+    const { next, data } = (await resp.json()) as bar_type;
+    collect(data);                                  // optional - overrides `response_cb` and flattens the resolved result
+    if (!next) return;                              // return nullish if no more data is expected
 
-  const url = new URL(req.url);
-  url.searchParams.set("next", next);
-  return new Request(url, req);         // return a request for more data
+    const url = new URL(req.url);
+    url.searchParams.set("next", next);
+    // remove a stale timeout signal (if it was set) - see Aborting section
+    // req = new Request(req, { signal: undefined });  
+    return new Request(url, req);                   // return a request for more data
 };
 
 const req = new Request("https://bar.domain.com/api/paged")
@@ -254,7 +256,7 @@ controller.abort();
 ```
 
 Fetch Manager will add the timeout signal just in time before the request is sent.
-The user signal will also be available.
+The user's abort signal will also be available.
 
 
 ## Options and overloads
@@ -283,11 +285,11 @@ const fm = new FetchManager({
 If a bucket for the instance is available, that can be used to initialise an instance, thus preserving or migrating the state of limits:
 ```ts
 const bucket = FetchManager.bucket.get(fm.uid);
-save_to_file(bucket)
+save_to_file(..., bucket)
 
 // Server restarts
 
-const bucket: fm.bucket = get_from_file(bucket)
+const bucket: fm.bucket = get_from_file(...)
 const fm = new FetchManager({
     bucket,
     targets: [...],
@@ -306,11 +308,11 @@ A target is one of two forms:
 - host
 - host + pathname
 
-A request url is matched against targets on a `startsWith` basis, so if a target is "foo.com/api" then
-- "https://foo.com/api/bar" will hit, but
-- "https://foo.com/bar" will miss
+A request url is matched against targets on a `startsWith` basis, so if a target is `foo.com/api` then
+- `https://foo.com/api/bar` - will hit, but
+- `https://foo.com/bar` - will miss
 
-Target sets are defined as an Array in two, or a mix of two shape as below:
+Target sets are defined as an Array in two, or a mix of two shapes as below:
 ```ts
 [
     "foo.domain.com",
@@ -318,7 +320,7 @@ Target sets are defined as an Array in two, or a mix of two shape as below:
 ]
 ```
 
-In the shape below, fallback options are specified for "bar.domain.com"
+In the shape below, fallback options are specified for `bar.domain.com`
 ```ts
 [
     "foo.domain.com",
@@ -335,30 +337,30 @@ In the shape below, fallback options are specified for "bar.domain.com"
 ]
 ```
 
-It is important that a target is only defined once across all instances. Fetch Manager in a single thread environment 
+It is important that a target is only defined once across all instances. Fetch Manager in a single thread context 
 will throw errors on conflicts - but orchestrators of distributed systems should be mindful of this,
 and more complex scenarios such as the following:
 
-instance_1 target defined as:
+instance_1 - target defined as:
 ```ts
 ["foo.com"]
 ```
 This will catch all API endpoints for foo.com, but foo.com may have endpoints with different rate limits, so we can do:
 
-instance_2 target defined as:
+instance_2 - target defined as:
 ```ts
 ["foo.com/api/special"]    
 ```
-Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, it's limit rules are implemented on `instance_2`.
-In a single threaded environment, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be flagged externally.
+Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, the target's limit rules are implemented on `instance_2`.
+In a single threaded context, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be flagged externally.
 
 ### Fetch
 In order to cater for non-standard `RequestInit` forms, a request can be defined as one of two shapes:
 - <`Request`> or
 - <`string`, `{...}` as RequestInit>
 
-`fm.fetch(Request)` is effectively the same as `fm.fetch("url", {...} as RequestInit)`, except you have the ability to pass non-standard options
-which native `new Request` would otherwise reject. For convenience this overload will be notated below as `<fm.req>`
+`fm.fetch(Request)` is effectively the same as `fm.fetch("url", {...} as RequestInit)`, except that you have the ability to pass non-standard options
+which native `new Request(...)` would otherwise reject. For convenience this overload will be notated below as `<fm.req>`
 
 The anatomy of a fetch is thus ordered as follows:
 ```ts
@@ -468,13 +470,18 @@ const fm_options: { [uid:string]: fm.opts.global<fm.kind>} ] = {...}
 
 your_orchestration.on("update", (all_targets, buckets) => {
     Object.entries(buckets).forEach(([uid, bucket]) => {
+        // bucket is unused, so save some resources
+        if(!bucket.time) return;         
+
         const targets = fm_targets[uid] || all_targets[uid]!;
         const options = fm_options[uid] || {};
+        // No such bucket on this instance, so clone it
         if(!fm[uid]) return (fm[uid] = new FetchManager(bucket, targets, options));
     
         const ex_bucket = FetchManager.bucket.get(uid)!;
         bucket.tokens = Math.min(bucket.tokens, ex_bucket.tokens);
-        bucket.concurrency = Math.max(bucket.concurrency, ex_bucket.concurrency);
+        bucket.concurrency = bucket.concurrency + ex_bucket.concurrency;
+        // Update the existing bucket
         FetchManager.bucket.set(uid, bucket);
     )}
 )}
@@ -492,7 +499,7 @@ your_orchestration.on("update", (all_targets, buckets) => {
     period: period;             // (immutable) "sec" | "min" | "hr" | "day"
     max_rpp: number;            // (immutable) The maximum requests per period
     max_concurrency: number;    // (immutable) The maximum concurrent requests allowed
-    time: number;               // (not editable) The last update epoch in ms
+    time: number;               // (not editable) The last update epoch in ms - 0 until first request is fetched
   };
 ```
 
@@ -536,10 +543,10 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 [top](#toc)
 ```bash
 bun i fetch-man # NPM
-bun i citkane/fetchmanager#v0.1.0 #Github
+bun i citkane/fetchmanager#v0.1.1 #Github
 
 npm i fetch-man # NPM
-npm i citkane/fetchmanager#v0.1.0 #Github
+npm i citkane/fetchmanager#v0.1.1 #Github
 
 ```
 
