@@ -6,7 +6,7 @@ A zero dependency wrapper around native Javascript `fetch` providing management 
 - response data
 
 For Node, Bun and the broowser (and probably Deno too).
-
+### toc
 - [Basic Usage](#basic-usage)
 - [Core concepts](#core-concepts)
 - [Paging](#paging)
@@ -24,7 +24,7 @@ For Node, Bun and the broowser (and probably Deno too).
 - [Similar libraries](#similar-libraries)
 
 ## Basic usage
-[top](#fetchmanager)
+[top](#toc)
 ### Initiate a Fetch Manager instance
 This will act upon a unique set of targets.
 
@@ -95,7 +95,7 @@ const baz = await fm.fetch(
 ```
 
 ## Core concepts
-[top](#fetchmanager)
+[top](#toc)
 
 Fetch Manager provides class instances acting on a unique set of one or more given targets. A target is one of:
 - [host](https://developer.mozilla.org/en-US/docs/Web/API/URL/host)
@@ -140,7 +140,7 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 - default retry wait (independant of wait_cb, default 500ms)
 
 ## Paging
-[top](#fetchmanager)
+[top](#toc)
 
 ... Continued from previous example
 
@@ -173,7 +173,7 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 
 
 ## Trace
-[top](#fetchmanager)
+[top](#toc)
 
 If defined, the trace callback will be executed at every heartbeat while the queue is not paused or empty, so be mindful of the resources it consumes.
 
@@ -254,7 +254,7 @@ The user signal will also be available.
 
 
 ## Options and overloads
-[top](#fetchmanager)
+[top](#toc)
 
 ### Class initialiser
 ```ts
@@ -394,7 +394,7 @@ Options passed directly to fm.fetch are priority (1). They will override any opt
 ```
 
 ## Advanced usage
-[top](#fetchmanager)
+[top](#toc)
 
 The Fetch Manager `fetch` method has some extra options to control queue priority.
 - `skip_queue` pushes the request to the front of the queue
@@ -433,7 +433,7 @@ If the buggy endpoint takes longer to respond (or error) than the retry wait tim
 Consider `force_retry` as an override to prioritise / de-prioritise a single request. A user provided `retry_cb` will be by-passed until all the `force_retry` counts have been depleted.
 
 ## Distributed architectures
-[top](#fetchmanager)
+[top](#toc)
 
 In a single thread, Fetch Manager will error and warn on conflicts between instances.
 In a distributed system, the tracking of rates and limits state will have to be orchestrated at a higher level.
@@ -504,7 +504,7 @@ When orchestrating, it is up to the user to validate:
 If limit settings across a distributed system differ, then global rate calculations will be corrupted.
 
 ## Instance destruction
-[top](#fetchmanager)
+[top](#toc)
 
 It is possible to destroy an instance and then re-use it's targets with new limiter rules. Two instance methods are provided:
 ### `FetchManager.kill`
@@ -529,7 +529,7 @@ await fm.stop();
 To cancel in-flight requests, the user should set up an `AbortSignal` and call it from their application code.
 
 ## Installation
-[top](#fetchmanager)
+[top](#toc)
 ```bash
 bun i fetch-man # NPM
 bun i citkane/fetchmanager#v0.1.0 #Github
@@ -540,7 +540,7 @@ npm i citkane/fetchmanager#v0.1.0 #Github
 ```
 
 ## More resources
-[top](#fetchmanager)
+[top](#toc)
 ### Types
 Fetch Manager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you helpful documentation.
 ### LibFetch
@@ -560,7 +560,7 @@ bun run_tests
 ```
 
 ## Demo
-[top](#fetchmanager)
+[top](#toc)
 
 Try a rather nifty WikiData explorer!
 ```bash
