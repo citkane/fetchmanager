@@ -1,8 +1,9 @@
-import FetchManager from "fetchmanager";
+import FetchManager from "fetch-man";
 import { test, describe, expect } from "bun:test";
 
 const urls = {
   retry_after: "http://localhost:3000/api/retry/1",
+  status: "http://localhost:3000/api/status",
   pager: "http://localhost:3000/api/pager",
   reset: "http://localhost:3000/api/reset",
 };
@@ -62,7 +63,6 @@ describe("fetch overloads", () => {
       collect(data);
       return next ? req : false;
     };
-
     const fm = new FetchManager(100, 100, "sec", ["localhost:3000"]);
 
     let req = new Request(urls.retry_after);
@@ -114,6 +114,47 @@ describe("fetch overloads", () => {
     expect(res2).toEqual(["OK", "OK"]);
 
     await fetch(urls.reset);
+    await fm.kill();
+  });
+
+  test("overload constructor", async () => {
+    let fm = new FetchManager(100, 50, "sec", ["localhost:3000"]);
+    const { uid } = FetchManager.hash(["localhost:3000"]);
+    let bucket = FetchManager.bucket.get(uid)!;
+    expect(bucket).toEqual({
+      concurrency: 0,
+      max_concurrency: 50,
+      max_rpp: 100,
+      period: "sec",
+      time: 0,
+      tokens: 100,
+      uid: "d18909e7",
+    });
+    await fm.kill();
+
+    bucket.concurrency = 10;
+    bucket.tokens = 50;
+    bucket.max_concurrency = 20;
+    bucket.max_rpp = 1;
+    bucket.time = new Date().valueOf();
+    const fail = () => new FetchManager(bucket, ["localhost:3000/api"]);
+    expect(fail).toThrowError(
+      "The provided bucket does not match this target group",
+    );
+    fm = new FetchManager(bucket, ["localhost:3000"]);
+    const res = await fm.fetch(urls.status);
+    expect(res).resolves.toSatisfy((res: Response) => res.ok);
+    bucket = FetchManager.bucket.get(fm.uid)!;
+    expect(bucket).toEqual({
+      concurrency: 10,
+      max_concurrency: 20,
+      max_rpp: 1,
+      period: "sec",
+      time: expect.any(Number),
+      tokens: 49,
+      uid: "d18909e7",
+    });
+    expect(bucket.time).not.toBe(0);
     await fm.kill();
   });
 });

@@ -1,39 +1,46 @@
 let server: Bun.Server<any> | undefined;
-let count = 0;
+let count_retry = 0;
+let count_pager = 0;
 
 function start() {
   server = Bun.serve({
     routes: {
       "/api/status": new Response("OK"),
 
-      "/api/300ms": () =>
-        new Promise((res) => setTimeout(() => res(new Response("OK")), 300)),
+      "/api/slow/:ms": (req) => {
+        const ms = Number(req.params.ms);
+        return new Promise((res) =>
+          setTimeout(() => res(new Response("OK")), ms),
+        );
+      },
 
       "/api/data": Response.json({ data: 1 }),
 
-      "/api/retry/:index": (i) => {
-        const index = i.params.index;
-
-        if (count < Number(index)) {
-          count++;
+      "/api/retry/:index": (req) => {
+        const index = Number(req.params.index);
+        if (count_retry < index) {
+          count_retry++;
           return new Response("", {
             status: 429,
             headers: { "Retry-After": "600" },
           });
         }
+        count_retry = 0;
         return new Response("OK");
       },
 
       "/api/pager": () => {
-        if (!count) {
-          count++;
+        if (!count_pager) {
+          count_pager++;
           return Response.json(["OK"], { headers: { next: "true" } });
         }
+        count_pager = 0;
         return Response.json(["OK"]);
       },
 
       "/api/reset": () => {
-        count = 0;
+        count_retry = 0;
+        count_pager = 0;
         return new Response("OK");
       },
 

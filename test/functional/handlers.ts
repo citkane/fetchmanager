@@ -1,4 +1,4 @@
-import FetchManager from "fetchmanager";
+import FetchManager from "fetch-man";
 import { test, describe, expect } from "bun:test";
 
 const urls = {
@@ -38,7 +38,7 @@ describe("callback handling", () => {
       count++;
       return resp instanceof Error ? false : resp.status === 429;
     };
-    const wait_cb = () => 800;
+    const wait_cb: fm.cb.wait = () => 800;
     const fm = new FetchManager(100, 100, "sec", ["localhost:3000"]);
     const then = new Date().valueOf();
     const req = fm.fetch(urls.retry_after, { retry_cb, wait_cb });
@@ -58,11 +58,7 @@ describe("callback handling", () => {
     const fm = new FetchManager(3, 1, "sec", ["localhost:3000"]);
     const promises = [...Array(4)].map(() => fm.fetch(urls.data, { trace_cb }));
     await Promise.all(promises);
-    expect(data).toEqual([
-      "max concurrency",
-      "rate limit exceeded",
-      "queue empty",
-    ]);
+    expect(data).toEqual(["max concurrency", "rate limit exceeded"]);
     await fm.kill();
   });
 

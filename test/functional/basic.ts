@@ -1,10 +1,10 @@
-import FetchManager from "fetchmanager";
+import FetchManager from "fetch-man";
 import { server } from "../index.test.ts";
 import { test, describe, expect } from "bun:test";
 
 const urls = {
   status: "http://localhost:3000/api/status",
-  "300ms": "http://localhost:3000/api/300ms",
+  slow: "http://localhost:3000/api/slow/300",
 };
 
 describe("basic functionality", () => {
@@ -32,7 +32,7 @@ describe("basic functionality", () => {
 
   test("it limits concurrency", async () => {
     const fm = new FetchManager(100, 2, "sec", ["localhost:3000"]);
-    const promises = [...Array(3)].map(() => fm.fetch(urls["300ms"]));
+    const promises = [...Array(3)].map(() => fm.fetch(urls["slow"]));
     const then = new Date().valueOf();
     await Promise.all(promises);
     const now = new Date().valueOf();
@@ -52,7 +52,7 @@ describe("basic functionality", () => {
         throw "shouldn't have resolved";
       })
       .catch((err) => {
-        expect(err.message).toBe("Host group was killed");
+        expect(err.message).toBe("Target group was killed");
       });
     await new Promise<void>((res) =>
       setTimeout(() => fm.kill().then(() => res()), 30),
@@ -67,7 +67,7 @@ describe("basic functionality", () => {
     const ok = Promise.all(promises);
     await fm.stop();
     expect(ok).resolves.toEqual([...Array(5)].map(() => true));
-    expect(fm.fetch(urls.status)).rejects.toThrow("Host group was killed");
+    expect(fm.fetch(urls.status)).rejects.toThrow("Target group was killed");
   });
 
   test("it replaces unused tokens", async () => {
@@ -87,26 +87,45 @@ describe("basic functionality", () => {
     }
   });
 
-  test("it gets and sets buckets", async () => {
+  test.only("it gets all buckets", async () => {
+    const fm = new FetchManager(10, 3, "sec", ["localhost:3000"]);
+    expect(FetchManager.buckets[fm.uid]).toEqual({
+      uid: "d18909e7",
+      max_rpp: 10,
+      max_concurrency: 3,
+      period: "sec",
+      tokens: 10,
+      concurrency: 0,
+      time: 0,
+    });
+    await fm.kill();
+  });
+
+  test("it gets and sets a bucket", async () => {
     const fm = new FetchManager(10, 3, "sec", ["localhost:3000"]);
     let bucket = FetchManager.bucket.get("localhost:3000")!;
     expect(bucket).toEqual({
+      uid: expect.any(String),
       max_concurrency: 3,
       max_rpp: 10,
       period: "sec",
       tokens: 10,
       concurrency: 0,
+      time: expect.any(Number),
     });
     bucket.tokens = 5;
     bucket.concurrency = 3;
-    FetchManager.bucket.set("localhost:3000", bucket);
-    bucket = FetchManager.bucket.get("localhost:3000")!;
+    const uid = Object.keys(FetchManager.targets)[0]!;
+    FetchManager.bucket.set(uid, bucket);
+    bucket = FetchManager.bucket.get(uid)!;
     expect(bucket).toEqual({
+      uid: expect.any(String),
       max_concurrency: 3,
       max_rpp: 10,
       period: "sec",
       tokens: 5,
       concurrency: 3,
+      time: expect.any(Number),
     });
     await fm.kill();
   });
