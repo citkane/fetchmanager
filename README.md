@@ -3,6 +3,7 @@ A zero dependency wrapper around native Javascript `fetch` providing management 
 - rate limitting
 - concurrency
 - paging
+- retry strategy
 - response data
 
 For Node, Bun and the browser (and probably Deno too).
