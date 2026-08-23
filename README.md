@@ -562,10 +562,10 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 ## Installation
 [top](#toc)
 ```bash
-bun i @citkane/fetch-manager # NPM
+bun i fetch-manager # NPM
 bun i citkane/fetchmanager#v0.1.0 #Github
 
-npm i @citkane/fetch-manager # NPM
+npm i fetch-manager # NPM
 npm i citkane/fetchmanager#v0.1.0 #Github
 
 ```
