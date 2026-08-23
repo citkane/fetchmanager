@@ -1,6 +1,6 @@
 {
   "name": "fetch-man",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "module": "./src/FetchManager.ts",
   "devDependencies": {
     "@types/bun": "^1.3.14",
@@ -17,7 +17,6 @@
   "scripts": {
     "run_tests": "bun test --pool-1 --bail",
     "build_wikidata": "bun build --minify --target=node --outfile=demo/wikidata.js demo/wikidata/",
-    "build_browser": "bun build --target=browser --outfile=demo/browser/index.js demo/browser/",
-    "wikidata": "node ./demo/wikidata.js"
+    "build_browser": "bun build --target=browser --outfile=demo/browser/index.js demo/browser/"
   }
 }

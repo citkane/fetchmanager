@@ -1,6 +1,6 @@
 # fetch-man (Fetch Manager)
-A zero dependency wrapper around native Javascript `fetch` providing management of:
-- rate limitting
+A zero dependency TS wrapper around native Javascript `fetch` providing management of:
+- rate limiting
 - concurrency
 - paging
 - retry strategy
@@ -12,14 +12,14 @@ For Node, Bun and the browser (and probably Deno too).
 - [Core concepts](#core-concepts)
 - [Paging](#paging)
 - [Trace](#trace)
-- [Aborting](#aborting)
+- [Aborting and timeouts](#aborting-and-timeouts)
 - [Options and overloads](#options-and-overloads)
 - [Advanced Usage](#advanced-usage)
 - [Distributed architectures](#distributed-architectures)
 - [Instance destruction](#instance-destruction)
 - [Installation](#installation)
 - [More Resources](#more-resources)
-- [Demo](#demo)
+- [Demonstration](#demonstration)
 - [What about Deno?](#what-about-deno)
 - [Why another fetch library?](#why-another-fetch-library)
 - [Similar libraries](#similar-libraries)
@@ -48,7 +48,7 @@ Use it akin to native `fetch`
 
 ```ts
 const foo_res = await fm.fetch("https://foo.domain.com/api").catch((err) => {
-    /* `err` is one of: */
+    // `err` is one of: 
     if (err instanceof Error) throw err;    // if no `Response` then `Error`
     console.error(err.status);              // if no `Response.ok` then `Response`
 });
@@ -61,6 +61,7 @@ Pre-process response data and inform `fm.fetch` of the expected return type
 const response_cb: fm.cb.resp = async (resp, _req) => {
   return resp.json().then((data: bar_t) => data.bar);
 };
+
 const req = new Request("https://bar.domain.com/api")
 const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }); // `bar` is now typed
 ```
@@ -74,25 +75,27 @@ const handlers: {
   retry_cb: fm.cb.retry;
   wait_cb: fm.cb.wait;
 } = {
-  retry_cb: (resp, _req) => {
-    return resp instanceof Error ? false : [503, 429].includes(resp.status);
-  },
-  wait_cb: (resp, _req) => {
-    /* We have already filtered out `Error`s in retry_cb,
-     * but the TS pre-processor doesn't know that. */
-    if (resp instanceof Error) return 0; 
-    const wait_ms = resp.headers.get("Retry-After") || "500";
-    return Number(wait_ms);
-  },
+    // Should a failed request be retried?
+    retry_cb: (resp, _req) => {
+      return resp instanceof Error ? false : [503, 429].includes(resp.status);
+    },
+    // How long to pause the queue before retrying?
+    wait_cb: (resp, _req) => {
+      /* We have already filtered out Errors in retry_cb,
+       * but the TS pre-processor doesn't know that. */
+      if (resp instanceof Error) return 0; 
+      const wait_ms = resp.headers.get("Retry-After") || "500";
+      return Number(wait_ms);
+    },
 };
 
 const baz = await fm.fetch(
     "https://baz.domain.com/api/endpoint",
-    /* If the global `RequestInit` type definition is not compliant, then force TS typing
-     * Ensure that your global `fetch` is capable of accepting the non-standard shape */
+    // If the global `RequestInit` type definition is not compliant, then force TS typing.
+    // Ensure that your global `fetch` is capable of accepting the non-standard shape. 
     { tls: { rejectUnauthorized: false } } as RequestInit, 
     handlers,
-);
+); // Now, unless there is some failure outside of 503 or 429, baz is guaranteed a Response.ok
 ```
 
 ## Core concepts
@@ -120,7 +123,8 @@ Logic such as paging and adaptive retry strategies are managed by user provided 
 - `response_cb`: manipulates the response payload into a desired data shape before resolving it.
 - `trace_cb`: provides diagnostic data about the state of the queue.
 
-Handlers (excepting trace) are injected with the `Response | Error` as well as the request in it's given shape: (see the `fm.req` type).
+Handlers (excepting trace) are injected with the `Response` as well as the request in it's given shape: (see the `fm.req` type).
+The injected response for `retry_cb` and `wait_cb` can be `Response | Error` - `pager_cb` and `response_cb` are guaranteed a `Response`.
 The pager_cb is injected also with an (optional) `collect` function to facilitate flattening the final data return. 
 
 Handlers can be set at 3 cascading levels of priority (excepting pager):
@@ -129,7 +133,7 @@ Handlers can be set at 3 cascading levels of priority (excepting pager):
 3) at class instantiation for the whole target group.
 
 Behaviour can thus be set globally, and overidden granularly. Paging is set on a per request basis.
-Fetch Manger is not very opinionated. It is up to the user to build a re-usable kit of callback handlers to manage their application logic.
+Fetch Manager is not very opinionated. It is up to the user to build a re-usable kit of callback handlers to manage their application logic.
 
 Each request has further utility options:
 - prioritise a request to the front of the queue
@@ -155,16 +159,18 @@ const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
 
     const url = new URL(req.url);
     url.searchParams.set("next", next);
-    // remove a stale timeout signal (if it was set) - see Aborting section
+    // remove a stale timeout signal (if it was set) - see the Aborting section
     // req = new Request(req, { signal: undefined });  
     return new Request(url, req);                   // return a request for more data
 };
 
 const req = new Request("https://bar.domain.com/api/paged")
 const all_data = await fm.fetch<bar_type["data"][]>(req, pager_cb);
+// You now have all your paged data in a single batch.
+
 ```
 
-`pager_cb` will cause `fm.fetch` to always return an `Array`.
+`pager_cb` will cause `fm.fetch` to always return an `Array` (if no fatal error).
 
 In the above example, we used the `collect` utility function. It is slightly opinionated. If `data` is `any[]`,
 then it will flatten the paged results so that `all_data` is also `any[]`.
@@ -178,12 +184,14 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 ## Trace
 [top](#toc)
 
-If defined, the trace callback will be executed at every heartbeat while the queue is not paused or empty, so be mindful of the resources it consumes.
+If used, the trace callback will be executed at every heartbeat while the queue is not paused or empty,
+so be mindful of the resources it may consume.
 
 example:
 Log the amount of request tokens remaining for the period, else a message indicating why the queue is stopped.
 ```ts
 const trace_cb: fm.cb.trace = (trace_data) => console.debug(trace_data.message || trace_data.tokens);
+const fm = new FetchManager(..., options: { trace_cb })
 ```
 
 <details>
@@ -210,7 +218,7 @@ type trace_data = {
 ```
 </details>
 
-## Aborting
+## Aborting and timeouts
 [top](#toc)
 
 Native Javascript `fetch` uses [signals](https://developer.mozilla.org/en-US/docs/Web/API/Request/signal) to manage user controlled aborts.
@@ -228,18 +236,22 @@ const response_cb: fm.cb.resp = (resp, _req) => {
 }
 
 const promises = [...Array(4)].map(
-    () => fm.fetch("https://foo.com", { signal }, { response_cb })
-        .catch(() => false);
+    () => fm.fetch("https://foo.com", { signal }, { response_cb }).catch(() => false);
 );
 const two_of_four = await Promise.all(promises) // returns [true, true, false, false] and logs "abort 2"
+
 ```
 
 However, because Fetch Manager is queing requests for unknown lengths of time,
-using the native [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) method at the user call will lead to unexpected timing results.
-For this purpose, you can set the `abort_timeout` option (in ms) at three levels of priority:
+attaching a native [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) at the initial `fm.fetch` call may lead to unexpected timing results, 
+depending on the result you want to achieve.
+For this purpose, you can set an `abort_timeout` option (in ms) at three levels of priority:
 - Per request, in the `fm.fetch` properties object (priority 1)
 - Default for a target in it's class initialiser options (priority 2)
 - Default for all targets in the class initialiser options (priority 3)
+
+Fetch Manager will add the timeout signal just in time before the request is sent.
+For paged queries, don't forget to unset the timeout signal in your `pager_cb`, else the first page's timer will cascade into subsequent requests.
 
 For example, to set it for a request:
 ```ts
@@ -255,8 +267,9 @@ const resp = await fm.fetch(req, { abort_timeout: 1000 }) // Will abort if the r
 controller.abort();
 ```
 
-Fetch Manager will add the timeout signal just in time before the request is sent.
-The user's abort signal will also be available.
+The user's abort signal will remain available, ie. the timeout signal is added - it does not replace user defined signals.
+
+If no `abort_timeout` is given, the default system timeout will be used, which can vary.
 
 
 ## Options and overloads
@@ -272,8 +285,8 @@ const fm = new FetchManager({
     options?: {
         wait_ms?: number,                   // Override the default (500) retry wait in ms
         heartbeat?: number,                 // Override the default (20) queue heartbeat in ms
-    /* Options defined hereunder are 
-     * fallen back on as priority (3) */
+        /* Options defined hereunder are 
+         * fallen back on as priority (3) */
         abort_timeout?: number,             // Number of ms after request is sent until abort
         retry_cb?: fm.cb.retry,             
         wait_cb?: fm.cb.wait,
@@ -282,7 +295,7 @@ const fm = new FetchManager({
 })
 
 ```
-If a bucket for the instance is available, that can be used to initialise an instance, thus preserving or migrating the state of limits:
+If a bucket for the instance is available, that may be used to initialise an instance, thus preserving or migrating the state of limits:
 ```ts
 const bucket = FetchManager.bucket.get(fm.uid);
 save_to_file(..., bucket)
@@ -298,6 +311,7 @@ const fm = new FetchManager({
 
 ```
 The bucket must match the targets, ie. the uid hash of the bucket must align with the targets definition else an error will be thrown.
+The user must create their own mechanism to store and retrieve `targets` and their `options`
 
 ### Target definitions
 
@@ -327,7 +341,7 @@ In the shape below, fallback options are specified for `bar.domain.com`
     {
         target_key: "bar.domain.com",
         /* Options defined hereunder are
-        fallen back on as priority (2) */
+         * fallen back on as priority (2) */
         abort_timeout?: number,              // Number of ms after request is sent until abort
         response_cb?: fm.cb.resp,       
         retry_cb?: fm.cb.retry,
@@ -345,19 +359,19 @@ instance_1 - target defined as:
 ```ts
 ["foo.com"]
 ```
-This will catch all API endpoints for foo.com, but foo.com may have endpoints with different rate limits, so we can do:
+This will catch all API endpoints for `foo.com`, but `foo.com` may have endpoints with different rate limits, so we can do:
 
 instance_2 - target defined as:
 ```ts
 ["foo.com/api/special"]    
 ```
 Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, the target's limit rules are implemented on `instance_2`.
-In a single threaded context, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be flagged externally.
+In a single threaded context, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be managed externally.
 
 ### Fetch
 In order to cater for non-standard `RequestInit` forms, a request can be defined as one of two shapes:
 - <`Request`> or
-- <`string`, `{...}` as RequestInit>
+- <"url", `{...}` as RequestInit>
 
 `fm.fetch(Request)` is effectively the same as `fm.fetch("url", {...} as RequestInit)`, except that you have the ability to pass non-standard options
 which native `new Request(...)` would otherwise reject. For convenience this overload will be notated below as `<fm.req>`
@@ -403,13 +417,14 @@ Options passed directly to fm.fetch are priority (1). They will override any opt
 [top](#toc)
 
 The Fetch Manager `fetch` method has some extra options to control queue priority.
-- `skip_queue` pushes the request to the front of the queue
+- `skip_queue` adds the request to the front of the queue
 - `force_retry` forces a failed request to retry x number of times.
 
 ### skip_queue
 ```ts
 const normal = fm.fetch("http://foo.com/api/normal")
 const important = fm.fetch("http://foo.com/api/important", {skip_queue: true})
+
 ```
 `important` will now be fetched before `normal`
 
@@ -418,6 +433,7 @@ This option is by nature quirky and opinionated. The examples below will illustr
 ```ts
 const buggy_endpoint = fm.fetch("http://foo.com/api/buggy", {force_retry: 5})
 const important_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.com/api/stuff")))
+
 ```
 
 If `buggy_endpoint` fails for any reason, it will be re-tried for up to 5 times from the back of the queue.
@@ -426,30 +442,32 @@ There are some quirks to this behaviour:
 - If the default retry wait is set to 500ms, `important_stuff` will proceed immediately and not wait on the buggy failure.
 - If `important_stuff` consumes 300ms to complete it's requests, then `buggy_endpoint` will wait the remaining 200ms before retrying.
 - if the user has provided `wait_cb`, and it returns eg. 1000ms (maybe a rate penalty is being imposed) - then the whole queue, including `important_stuff`, will wait for 1000ms
+and the 500ms wait for `buggy_endpoint` will have expired.
 
 We can also do the inverse, and prioritise request retries to the front of the queue.
 ```ts
-const buggy_important = fm.fetch("http://foo.com/api/buggy", {force_retry: -5})
+const buggy_important = fm.fetch("http://foo.com/api/buggy", { force_retry: -5 })
 const normal_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.com/api/stuff")))
+
 ```
 
 Note the negative (-5). `buggy_important` will now retry up to five times from the front of the queue before `normal_stuff` is requested.
-If the buggy endpoint takes longer to respond (or error) than the retry wait time, then `normal_stuff` will fill in the gaps with requests.
+If the buggy endpoint takes longer to respond (or error) than the default retry wait time, then `normal_stuff` will fill in the gaps with requests.
 
-Consider `force_retry` as an override to prioritise / de-prioritise a single request. A user provided `retry_cb` will be by-passed until all the `force_retry` counts have been depleted.
+Consider `force_retry` as an override to prioritise / de-prioritise a single request. A user provided `retry_cb` will be by-passed until all the request's `force_retry` counts have been depleted.
 
 ## Distributed architectures
 [top](#toc)
 
-In a single thread, Fetch Manager will error and warn on conflicts between instances.
+In a single thread context, Fetch Manager will error and warn on conflicts between instances.
 In a distributed system, the tracking of rates and limits state will have to be orchestrated at a higher level.
 
 Fetch Manager does not in and of itself provide orchestration tooling, but it does expose helpers to access and set the needed data.
 A bucket contains the limits and current rates for a target group. It is linked to a class instance (a group of targets) by it's hash uid.
 - `fm.uid`                                          - Instance uid (it's a hash of target keys sorted longest to shortest) 
 - `FetchManager.buckets`                            - Static map of uid keyed buckets
-- `FetchManager.bucket.get(uid_or_target)`          - Get a bucket
-- `FetchManager.bucket.set(uid_or_target, bucket)`  - Set a bucket
+- `FetchManager.bucket.get(uid_or_target)`          - Get an existing bucket
+- `FetchManager.bucket.set(uid_or_target, bucket)`  - Modify an existing bucket
 - `FetchManager.targets`                            - Static map of uid keyed target key groups
 - `FetchManager.hash(targets: fm.target[])`         - Create a uid and sorted array of target keys from a target group.
 
@@ -464,7 +482,8 @@ your_orchestration.publish("update", all_targets, buckets)
 ```ts
 // destination thread
 
-const fm: { [uid: string]: InstanceType<FetchManager> } = {...}
+// Your internal registry
+const fm_instances: { [uid: string]: InstanceType<FetchManager> } = {...}
 const fm_targets: { [uid: string]: fm.target[] } = {...}
 const fm_options: { [uid:string]: fm.opts.global<fm.kind>} ] = {...}
 
@@ -475,13 +494,13 @@ your_orchestration.on("update", (all_targets, buckets) => {
 
         const targets = fm_targets[uid] || all_targets[uid]!;
         const options = fm_options[uid] || {};
-        // No such bucket on this instance, so clone it
-        if(!fm[uid]) return (fm[uid] = new FetchManager(bucket, targets, options));
+        // No instance yet, so create it
+        if(!fm_instances[uid]) return (fm_instances[uid] = new FetchManager(bucket, targets, options));
     
         const ex_bucket = FetchManager.bucket.get(uid)!;
         bucket.tokens = Math.min(bucket.tokens, ex_bucket.tokens);
         bucket.concurrency = bucket.concurrency + ex_bucket.concurrency;
-        // Update the existing bucket
+        // Update the existing instance bucket
         FetchManager.bucket.set(uid, bucket);
     )}
 )}
@@ -517,6 +536,7 @@ If limit settings across a distributed system differ, then global rate calculati
 ## Instance destruction
 [top](#toc)
 
+It may be neeeded to change rate limits for targets - eg. maybe different rates for different times of day.
 It is possible to destroy an instance and then re-use it's targets with new limiter rules. Two instance methods are provided:
 ### `FetchManager.kill`
 This will immediately stop processing the queue and all awaiting requests will be rejected with the message "Target group was killed".
@@ -543,15 +563,16 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 [top](#toc)
 ```bash
 bun i fetch-man # NPM
-bun i citkane/fetchmanager#v0.1.1 #Github
+bun i citkane/fetchmanager#v0.1.0 #Github
 
 npm i fetch-man # NPM
-npm i citkane/fetchmanager#v0.1.1 #Github
+npm i citkane/fetchmanager#v0.1.0 #Github
 
 ```
 
 ## More resources
 [top](#toc)
+
 ### Types
 Fetch Manager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you helpful documentation.
 ### LibFetch
@@ -567,19 +588,25 @@ const retry_cb = lib_fetch.retry...
 ### Tests
 Tests are made for the Bun framework. You can examine these to better understand the expectations for various aspects of the library.
 ```bash
+git clone https://github.com/citkane/fetchmanager
+cd fetchmanager
+bun init
 bun run_tests
 ```
 
-## Demo
+## Demonstration
 [top](#toc)
 
 Try a rather nifty WikiData explorer!
 ```bash
-node --run=wikidata
-```
+# If you have installed Fetch Manager as a module:
+node ./node_modules/fetch-man/demo/wikidata.js
+bun ./node_modules/fetch-man/demo/wikidata.js
 
-```bash
-bun ./demo/wikidata/
+# If you have cloned the repository:
+node ./demo/wikidata.js
+bun ./demo/wikidata.js
+
 ```
 
 ## What about Deno?

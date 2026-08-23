@@ -19,11 +19,12 @@
 import { hash } from "./hash.ts";
 
 /**
- * # A zero dependency wrapper around native Javascript {@link fetch}
+ * # A zero dependency TS wrapper around native Javascript {@link fetch}
  * It provides management of:
  * - rate limitting
  * - concurrency
  * - paging
+ * - retry strategy
  * - response data
  *
  * Minimal usage
@@ -48,7 +49,7 @@ export default class FetchManager<G extends fm.kind> {
       wait_ms: 500,
       heartbeat: 20,
     };
-    const p = args.constructor_params(default_opts, ...params);
+    const p = args.res_constructor(default_opts, ...params);
 
     // The user did not provide targets, so fail fast
     if (!p.targets.length)
@@ -191,9 +192,9 @@ export default class FetchManager<G extends fm.kind> {
   ): Promise<T> => {
     const { fetch_factory, limiter } = this;
     const { skip_queue, resolve } = part_ctx;
-    const is_retry = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
-    if (is_retry) {
-      const req_fn = fetch_factory(is_retry);
+    const retry_ctx = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
+    if (retry_ctx) {
+      const req_fn = fetch_factory(retry_ctx);
       skip_queue
         ? limiter.reqs.queue.unshift(req_fn)
         : limiter.reqs.queue.push(req_fn);
@@ -250,13 +251,15 @@ export default class FetchManager<G extends fm.kind> {
         limiter.bucket.dec_concurrent();
         limiter.bucket.stamp_time();
         // No response - so no rate penalty except if user aborted
+        // TODO - examine this logic more closely
         limiter.bucket.replace_token(error);
         return handle.error(ctx, error);
       }
 
+      // Got a Response, so proceed
       limiter.bucket.dec_concurrent();
       limiter.bucket.stamp_time();
-      // Response was not OK, so we handle the error
+      // Response was not OK, so we handle the failed Response
       if (!resp.ok) return handle.error(ctx, resp);
 
       // Response was OK, so pass it through the user's pager_cb
@@ -269,6 +272,7 @@ export default class FetchManager<G extends fm.kind> {
         const data = ctx.response_cb(resp, req);
         ctx.resolve(data);
       } catch (error) {
+        // Error in user's callback function - reject
         ctx.reject(err.ensure_error(error));
       }
     }
@@ -276,7 +280,7 @@ export default class FetchManager<G extends fm.kind> {
 
   /** Functionality related to the instance limiter including bucket and tokens **/
   private limiter_factory = (
-    init: ReturnType<typeof this.args.constructor_params>,
+    init: ReturnType<typeof this.args.res_constructor>,
   ): fm.p.limiter<G> => {
     const { handle, targets, target_keys, uid } = this;
     const { err } = FetchManager;
@@ -284,7 +288,7 @@ export default class FetchManager<G extends fm.kind> {
     const reqs = make_reqs();
     const paused = make_paused(init.options);
     const bucket = make_bucket(init.bucket);
-    const heartbeat = null;
+    const heartbeat = null; // The Interval is set in the class constructor
     const {
       response_cb,
       retry_cb,
@@ -381,7 +385,9 @@ export default class FetchManager<G extends fm.kind> {
     function make_bucket(init_bucket?: fm.bucket): fm.p.limiter_bucket {
       const ms = period_ms[init.period];
       const interval_ms = Math.ceil(ms / init.max_rpp);
+      // drip a token into the bucket at the rate limit
       const interval = setInterval(() => add(), interval_ms);
+      // use the user provided bucket, or create a new one
       const bucket: fm.bucket = init_bucket || {
         uid,
         max_rpp: init.max_rpp,
@@ -406,24 +412,27 @@ export default class FetchManager<G extends fm.kind> {
         kill,
       };
 
+      // Used by the static FetchManager.bucket.set method
+      // Changing the rate limits is an error - only `tokens` and `concurrency` can be set.
       function set(new_bucket: fm.bucket) {
-        if (new_bucket.period !== init.period)
+        const { tokens, concurrency, period, max_rpp, max_concurrency } =
+          new_bucket;
+        if (period !== init.period)
           return err.throw(uid, "periods must match", {
             have: init.period,
-            got: new_bucket.period,
+            got: period,
           });
-        if (new_bucket.max_rpp !== init.max_rpp)
+        if (max_rpp !== init.max_rpp)
           return err.throw(uid, "max_rpp must match", {
             have: init.max_rpp,
-            got: new_bucket.max_rpp,
+            got: max_rpp,
           });
-        if (new_bucket.max_concurrency !== init.max_concurrency)
+        if (max_concurrency !== init.max_concurrency)
           return err.throw(uid, "max_concurrency must match", {
             have: init.max_concurrency,
-            got: new_bucket.max_concurrency,
+            got: max_concurrency,
           });
 
-        const { tokens, concurrency } = new_bucket;
         bucket.tokens = tokens;
         bucket.concurrency = concurrency;
       }
@@ -433,6 +442,7 @@ export default class FetchManager<G extends fm.kind> {
       }
 
       function is_full() {
+        if (bucket.tokens > init.max_rpp) bucket.tokens = init.max_rpp;
         return bucket.tokens >= init.max_rpp;
       }
 
@@ -465,6 +475,7 @@ export default class FetchManager<G extends fm.kind> {
       }
 
       function dec_concurrent() {
+        if (bucket.concurrency < 0) bucket.concurrency = 0;
         if (!bucket.concurrency)
           return err.warn(uid, "No concurrency to decrease");
         bucket.concurrency--;
@@ -487,7 +498,7 @@ export default class FetchManager<G extends fm.kind> {
 
   /** Functionality related to argument parsing **/
   private args = {
-    constructor_params: (
+    res_constructor: (
       default_opts: fm.opts.global<G>,
       ...pms: fm.opts.instance<G>
     ) => {
@@ -1011,19 +1022,23 @@ export default class FetchManager<G extends fm.kind> {
     },
 
     ensure_error: (err: unknown) => {
-      return err instanceof Error
-        ? err
-        : typeof err === "string"
-          ? Error(err)
-          : typeof err === "number"
-            ? Error(String(err))
-            : typeof err === "object" &&
-                Object.hasOwn(err!, "toString") &&
-                err!.toString instanceof Function
-              ? Error(err!.toString())
-              : typeof err === "object"
-                ? Error(JSON.stringify(err))
-                : Error("undefined error");
+      try {
+        return err instanceof Error
+          ? err
+          : typeof err === "string"
+            ? Error(err)
+            : typeof err === "number"
+              ? Error(String(err))
+              : typeof err === "object" &&
+                  Object.hasOwn(err!, "toString") &&
+                  err!.toString instanceof Function
+                ? Error(err!.toString())
+                : typeof err === "object"
+                  ? Error(JSON.stringify(err))
+                  : Error("unknown error");
+      } catch (_err) {
+        return Error("unknown error");
+      }
     },
   };
 
@@ -1042,11 +1057,11 @@ export default class FetchManager<G extends fm.kind> {
     hash_id: string,
     limiter: fm.p.limiter<fm.kind>,
   ) => {
-    const { limiters, target_groups } = this;
+    const { limiters, target_groups, all_target_keys } = this;
     limiters.set(hash_id, limiter);
     target_groups.set(hash_id, target_keys);
     // We sort all target keys to enable finding keys with pathnames first (longest first)
-    this.all_target_keys = [...this.all_target_keys, ...target_keys].sort(
+    this.all_target_keys = [...all_target_keys, ...target_keys].sort(
       (a, b) => b.length - a.length,
     );
   };
