@@ -1,325 +1,549 @@
-/// <reference path="./types.d.ts" />
+/*
+ * Copyright (C) 2026 Michael Jonker
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
+/// <reference path="./types.d.ts" />
+import { hash } from "./hash.ts";
+
+/**
+ * # A zero dependency wrapper around native Javascript {@link fetch}
+ * It provides management of:
+ * - rate limitting
+ * - concurrency
+ * - paging
+ * - response data
+ *
+ * Minimal usage
+ * ```ts
+ * const fm = new FetchManager(300, 3, "min", ["foo.com"]);
+ * const resp = await fm.fetch("https://foo.com/api/status");
+ * ```
+ * or use a pre-existing bucket:
+ * ```ts
+ * const fm = new FetchManager(bucket, ["foo.com"]);
+ * const resp = await fm.fetch("https://foo.com/api/status");
+ * ```
+ * */
 export default class FetchManager<G extends fm.kind> {
-  constructor(...opts: fm.opts.instance<G>) {
+  constructor(...params: fm.opts.instance_f<G>);
+  constructor(...params: fm.opts.instance_b<G>);
+  constructor(...params: fm.opts.instance<G>) {
+    FetchManager.class_name = this.constructor.name;
+    const { set_limiter, target_groups, err } = FetchManager;
+    const { args, dequeue, limiter_factory } = this;
     const default_opts = {
       wait_ms: 500,
       heartbeat: 20,
     };
-    const { limiters } = FetchManager;
-    const { err, hosts, args, dequeue, limiter_factory } = this;
-    const new_hosts: fm.host<G>[] = opts[3];
-    if (!new_hosts.length) err.throw("No hosts given in constructor", opts);
+    const p = args.constructor_params(default_opts, ...params);
 
-    const new_host_keys = hosts.make_host_keys(new_hosts);
-    const err_mssg = args.do_hosts_clash(new_host_keys, limiters);
-    if (err_mssg) {
-      err.throw(err_mssg, opts, {
-        new_host_keys,
-        ex_host_keys: Object.keys(limiters),
+    // The user did not provide targets, so fail fast
+    if (!p.targets.length)
+      err.throw("", "No targets given in constructor", params);
+
+    const { target_keys, uid } = hash(p.targets);
+    const targ_filter = args.dedupe_targets(p.targets, target_keys);
+    p.targets = targ_filter.used || p.targets;
+    this.target_keys = target_keys;
+    this.uid = uid;
+
+    /* ************************
+     * Errors and Warnings
+     * ************************ */
+    if (p.bucket && p.bucket.uid !== uid)
+      err.throw(
+        uid,
+        "The provided bucket does not match this target group.",
+        p.bucket,
+      );
+
+    const clash = args.do_buckets_clash(target_keys, uid);
+    if (clash && typeof clash === "string") {
+      // The target definition overlaps with previous definitions
+      err.throw(uid, clash, params, {
+        new_targets: target_keys,
+        ex_targets: target_groups,
       });
     }
 
-    this.fetch = this.fetch.bind(this);
-    this.host_keys = new_host_keys;
-    if (limiters.has(this.host_keys)) {
-      const mssg = "Host set was already defined. Previous options are used.";
-      err.warn(mssg, this.host_keys);
-      return;
+    if (targ_filter.rejected?.length) {
+      // Duplicate target options were found (duplicate string definitions get pruned)
+      err.warn(uid, "Duplicate targets were found", targ_filter);
     }
 
-    opts[4] = args.constructor_opts(default_opts, ...opts);
-    const limiter: fm.p.limiter<fm.kind> = limiter_factory(...opts) as any;
-    limiters.set(this.host_keys, limiter);
+    if (clash === true) {
+      // The target group is identical to a previous instance
+      // We return so that the previous instance's state is used
+      const mssg =
+        "Got a duplicate target group. Previous options were retained";
+      err.warn(uid, mssg, { group: target_keys });
+      return;
+    }
+    /* ************************
+     * End errors and Warnings
+     * ************************ */
 
-    this.heartbeat = setInterval(dequeue, opts[4].heartbeat);
+    // Create a limiter and start polling the request queue
+    const limiter = limiter_factory(p);
+    set_limiter(target_keys, uid, limiter);
+    limiter.heartbeat = setInterval(dequeue, limiter.heartbeat_ms);
   }
 
-  /* Overloads for wrapped `fetch` */
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.r_o<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.r_p<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.r_o_p<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_i
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_o<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_o_p<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_p<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_i_o<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_i_p<K>
-  ): Promise<T>;
-  public fetch<T = fm.fol.resp, K extends fm.fol.knd = G>(
-    ...p: fm.fol.u_i_o_p<K>
-  ): Promise<T>;
+  /* The wrapped `fetch` method */
+  public fetch: fm.fol.fetch = <T = Response>(...p: fm.fol.fetch_pms<G>) => {
+    const { err } = FetchManager;
+    const { queue_req, args, limiter, uid } = this;
+    if (!limiter) return err.reject(uid, "Target group was killed");
 
-  /**
-   * The wrapped native `fetch` method
-   * */
-  public fetch(this: FetchManager<G>, ...pms: fm.fol.fetch_pms<G>) {
-    const { queue_req, args, err } = this;
-    const { fetch_overload_args, make_ctx, ident_req_kind } = args;
-    const { reject } = err;
-    const req_or_url: string | Request = pms[0];
-    const kind = ident_req_kind(req_or_url);
-    if (!kind) return reject("A `Request.url` or url string must be provided.");
+    const req_kind = args.ident_req_kind(p);
+    if (!req_kind)
+      return err.reject(uid, "A Request or url string must be provided.");
 
-    const ctx_pms = fetch_overload_args(kind, ...pms);
-    const part_ctx = make_ctx(ctx_pms);
-    return queue_req(part_ctx);
-  }
+    const ctx_pms = args.res_fetch_overload(req_kind, ...p);
+    const url = args.url(ctx_pms.url, ctx_pms.req);
+    const target_key = limiter.find_target(url);
 
-  /* The native fetch implementation */
+    if (target_key instanceof Error)
+      // The target wasn't found, or it exists in another instance
+      return err.reject(uid, target_key.message, target_key.cause);
+
+    const part_ctx = args.make_ctx(target_key, ctx_pms);
+    return queue_req<T>(part_ctx);
+  };
+
+  /** The native fetch implementation */
   private native_fetch = (ctx: fm.p.ctx<G>) => {
-    const { url, req_init, req } = ctx.ctx_req;
-    const req_clone = req ? req.clone() : undefined;
-    return req_clone ? fetch(req_clone) : fetch(url!, req_init);
+    const { ctx_req, abort_timeout } = ctx;
+    let { url, req_init, req } = ctx_req;
+    // Capture potential user signal from the given request
+    const user_signal = req?.signal || req_init?.signal;
+    // Create a timeout signal if set by user option
+    const timeout = abort_timeout
+      ? AbortSignal.timeout(abort_timeout)
+      : undefined;
+    // Transfer signals into the request
+    const signals: AbortSignal[] = [user_signal, timeout].filter((s) => !!s);
+    const init = signals.length ? { signal: AbortSignal.any(signals) } : {};
+    const params = req
+      ? // create a new Request - the original's body may be accessed in the callback chain.
+        ([new Request(req, init)] as const)
+      : ([url!, { ...(req_init || {}), ...init }] as const);
+    // Execute native fetch
+    return fetch(params[0], params[1]);
   };
 
   /**
-   * Immediately kill a set of hosts and release them for re-definition
-   * Awaiting requests will be rejected with the message "Host group was killed"
+   * # Immediately kill a group of targets and release them for re-definition
+   * Queued requests will be rejected with the message "Target group was killed"
+   * To cancel in-flight requests, add an Abort signal and abort from your code.
    * */
   public kill = async () => {
-    const { limiters } = FetchManager;
-    const { host_keys, limiter } = this;
-    clearInterval(this.heartbeat);
-    limiter.reqs.queue.forEach((req) =>
-      req.get_ctx().reject("Host group was killed"),
-    );
-    limiter.reqs.queue = [];
-    limiters.delete(host_keys);
+    const { limiters, target_groups, all_target_keys } = FetchManager;
+    const { limiter, uid } = this;
+    const target_keys = target_groups.get(uid) || [];
+    clearInterval(limiter.heartbeat);
+    limiter?.bucket.kill();
+    limiter?.reqs.queue.forEach((req) => {
+      const { reject } = req.get_ctx();
+      reject(Error("Target group was killed"));
+    });
+    if (target_keys.length)
+      FetchManager.all_target_keys = all_target_keys.filter(
+        (key) => !target_keys.includes(key),
+      );
+    limiters.delete(uid);
+    target_groups.delete(uid);
     return;
   };
 
   /**
-   * Cleanly stop a set of hosts and release their names for re-definition
+   * # Cleanly stop a group of targets and release them for re-definition
    * The user must stop feeding the queue, else it will not stop.
+   * The queue will stop polling after all requests have been sent, but not necesarily resolved.
    * */
   public stop = async () => {
-    const { limiter, stop, kill, heartbeat } = this;
-    if (limiter.reqs.queue.length)
-      return new Promise((res) => setTimeout(() => res(stop()), heartbeat));
+    const { limiter, kill } = this;
+    return new Promise<void>((res) => poll(res));
 
-    return kill();
+    function poll(res: () => void) {
+      return limiter.reqs.queue.length
+        ? setTimeout(() => poll(res), limiter.heartbeat_ms)
+        : kill().then(() => res());
+    }
   };
 
-  private queue_req = async (part_ctx: Partial<fm.p.ctx<G>>) => {
-    const { fetch_factory, unshift_queue, push_queue, err } = this;
-    const { skip_queue, host_string, resolve } = part_ctx;
-    const full_ctx = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
-    if (full_ctx) {
-      const req_fn = fetch_factory(full_ctx);
-      skip_queue ? unshift_queue(req_fn) : push_queue(req_fn);
-      return;
+  /** A request is added to the queue */
+  private queue_req = async <T = any>(
+    part_ctx: Partial<fm.p.ctx<G>>,
+  ): Promise<T> => {
+    const { fetch_factory, limiter } = this;
+    const { skip_queue, resolve } = part_ctx;
+    const is_retry = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
+    if (is_retry) {
+      const req_fn = fetch_factory(is_retry);
+      skip_queue
+        ? limiter.reqs.queue.unshift(req_fn)
+        : limiter.reqs.queue.push(req_fn);
+      return undefined as never;
     }
 
-    const def = { defined: this.host_keys };
-    const is_def = def.defined.includes(host_string!);
-    if (!is_def) return err.reject(`Host not defined: ${host_string}`, def);
-
+    // The user receives this promise from the `fetch` method.
+    // It's `resolve` and `reject` are carried throughout the request lifecycle
     return new Promise((resolve, reject) => {
       const full_ctx = { ...part_ctx, resolve, reject } as fm.p.ctx<G>;
       const req_fn = fetch_factory(full_ctx);
-      skip_queue ? unshift_queue(req_fn) : push_queue(req_fn);
+      skip_queue
+        ? limiter.reqs.queue.unshift(req_fn)
+        : limiter.reqs.queue.push(req_fn);
     });
   };
 
+  /** Process the next request in the queue
+   * This gets called at every heartbeat **/
   private dequeue = () => {
     const { limiter, handle } = this;
-    const { reqs, paused, rpp } = limiter;
-    const is_stopped = reqs.stop(),
-      is_throttled = rpp.throttle(),
-      is_paused = paused.refr_state();
+    const ctx = limiter.reqs.queue[0]?.get_ctx();
+    const is_paused = limiter.paused.refr_pause(ctx);
+    // Should the next request be sent?
+    if (limiter.reqs.is_stopped() || limiter.bucket.is_stopped() || is_paused)
+      // do not trace if the queue is empty or paused
+      return ctx && !is_paused ? handle.trace(ctx) : undefined;
 
-    const ctx = reqs.queue[0]?.get_ctx();
-    if (ctx) setTimeout(() => handle.trace(ctx));
-    if (is_stopped || is_throttled || is_paused) return;
-
-    const { execute_fetch } = reqs.queue.shift()!;
-    rpp.increment();
-    reqs.incr_concurrent();
+    // Yes, good to go!
+    limiter.bucket.remove_token();
+    limiter.bucket.inc_concurrent();
+    limiter.bucket.stamp_time();
+    handle.trace(ctx!);
+    const { execute_fetch } = limiter.reqs.queue.shift()!;
     execute_fetch();
   };
 
-  private push_queue = (fns: fm.p.fetch_fn<G>) => {
-    const { queue } = this.limiter.reqs;
-    queue.push(fns);
-  };
-
-  private unshift_queue = (fns: fm.p.fetch_fn<G>) => {
-    const { queue } = this.limiter.reqs;
-    queue.unshift(fns);
-  };
-
+  /** Functionality related to fetch handling **/
   private fetch_factory = (ctx: fm.p.ctx<G>): fm.p.fetch_fn<G> => {
-    const { response_cb, pager_cb, resolve, reject, ctx_req } = ctx;
     const { limiter, handle, args, native_fetch } = this;
-    const { reqs } = limiter;
-    const { pager, error } = handle;
-    const { to_fm_req } = args;
+    const { err } = FetchManager;
     return {
       execute_fetch,
       get_ctx: () => ctx,
     };
 
+    // Trigger native fetch and handle the response.
     async function execute_fetch() {
       let resp: Response;
       try {
         resp = await native_fetch(ctx);
-      } catch (err) {
-        reqs.decr_concurrent();
-        return error(ctx, err as Error);
+      } catch (_error) {
+        const error = err.ensure_error(_error);
+        limiter.bucket.dec_concurrent();
+        limiter.bucket.stamp_time();
+        // No response - so no rate penalty except if user aborted
+        limiter.bucket.replace_token(error);
+        return handle.error(ctx, error);
       }
-      reqs.decr_concurrent();
-      if (!resp.ok) return error(ctx, resp);
-      if (pager_cb) return pager(ctx, resp, pager_cb);
-      if (!response_cb) return resolve(resp);
 
+      limiter.bucket.dec_concurrent();
+      limiter.bucket.stamp_time();
+      // Response was not OK, so we handle the error
+      if (!resp.ok) return handle.error(ctx, resp);
+
+      // Response was OK, so pass it through the user's pager_cb
+      if (ctx.pager_cb) return handle.pager(ctx, resp, ctx.pager_cb);
+      // or resolve the Response
+      if (!ctx.response_cb) return ctx.resolve(resp);
+      // or pass the Response through the user's response_cb
       try {
-        const req = to_fm_req(ctx_req);
-        const data = response_cb(resp, req);
-        resolve(data);
-      } catch (err) {
-        reject(err);
+        const req = args.to_fm_req(ctx.ctx_req);
+        const data = ctx.response_cb(resp, req);
+        ctx.resolve(data);
+      } catch (error) {
+        ctx.reject(err.ensure_error(error));
       }
     }
   };
 
+  /** Functionality related to the instance limiter including bucket and tokens **/
   private limiter_factory = (
-    max_rpp: number,
-    max_concurrency: number,
-    rpp_period: fm.period,
-    fm_hosts: fm.host<G>[],
-    options?: fm.opts.global<G>,
+    init: ReturnType<typeof this.args.constructor_params>,
   ): fm.p.limiter<G> => {
-    const { handle, err } = this;
-    const hosts = this.hosts.fm_to_ctx_hosts(fm_hosts);
-    const { response_cb, retry_cb, wait_cb, trace_cb } = options!;
-    const reqs = reqs_factory(max_concurrency);
-    const paused = paused_factory(options!);
-    const rpp = rpp_factory(rpp_period, max_rpp);
-
-    return {
-      wait_ms: options!.wait_ms!,
-      hosts,
-      reqs,
-      paused,
-      rpp,
+    const { handle, targets, target_keys, uid } = this;
+    const { err } = FetchManager;
+    const target_options = targets.to_ctx_opts(init.targets);
+    const reqs = make_reqs();
+    const paused = make_paused(init.options);
+    const bucket = make_bucket(init.bucket);
+    const heartbeat = null;
+    const {
       response_cb,
       retry_cb,
       wait_cb,
       trace_cb,
+      wait_ms,
+      heartbeat: heartbeat_ms,
+      abort_timeout,
+    } = init.options;
+
+    return {
+      wait_ms: wait_ms!,
+      target_options,
+      reqs,
+      paused,
+      bucket,
+      response_cb,
+      retry_cb,
+      wait_cb,
+      trace_cb,
+      heartbeat_ms: heartbeat_ms!,
+      heartbeat,
+      find_target,
+      abort_timeout,
     };
 
-    function paused_factory(options: fm.opts.global<G>): fm.p.limiter_paused {
-      const { warn } = err;
-      const { trace } = handle;
-      const { heartbeat } = options;
-      const paused = { set_state, refr_state, state, ms: 0 };
-      return paused;
+    // find the target key from the request url
+    function find_target(url: URL) {
+      const { all_target_keys, find_uid } = FetchManager;
+      const { host, pathname } = url;
+      const target_search = host + pathname;
+      // all_target_keys is sorted longest first, so the first match will be host + pathname before host
+      const target_key = all_target_keys.find((key) =>
+        target_search.startsWith(key),
+      );
+      if (!target_key)
+        return Error("No target found", { cause: { url: url.toString() } });
 
-      function refr_state() {
-        paused.ms = paused.ms ? paused.ms - heartbeat! : 0;
-        paused.ms = paused.ms < 0 ? 0 : paused.ms;
-        return state();
+      if (!target_keys.includes(target_key))
+        return Error("Target in another group", {
+          cause: {
+            url: url.toString(),
+            target_group: find_uid(target_key),
+          },
+        });
+
+      return target_key;
+    }
+
+    // handle and query paused state
+    function make_paused(options: fm.opts.global<G>): fm.p.limiter_paused {
+      const { heartbeat } = options;
+      return { set_pause, refr_pause, is_paused, ms: 0 };
+
+      function refr_pause(ctx?: fm.p.ctx<G>) {
+        if (ctx?.paused) ctx.paused();
+        paused.ms = paused.ms ? Math.max(0, paused.ms - heartbeat!) : 0;
+        return is_paused();
       }
-      function set_state(ms: number) {
+
+      function set_pause(ms: number, ctx: fm.p.ctx<G>) {
+        ms = Math.max(0, ms);
         if (!ms) return;
-        if (ms < 0) return warn(`Cannot pause on negative (${ms})ms`);
 
         ms = Math.ceil(ms / heartbeat!) * heartbeat!;
         if (ms <= paused.ms) return;
 
         paused.ms = ms;
-        const ctx = reqs.queue[0]?.get_ctx();
-        if (ctx) trace(ctx, `Fetch is paused for ${paused.ms}ms`);
+        handle.trace(ctx, `Fetch is paused for ${paused.ms}ms`);
       }
-      function state() {
+      function is_paused() {
         return paused.ms > 0;
       }
     }
 
-    function reqs_factory(max_concurrency: number): fm.p.limiter_reqs<G> {
-      const reqs = {
+    // access and query the request queue
+    function make_reqs(): fm.p.limiter_reqs<G> {
+      return {
         queue: [],
-        concurrency: 0,
-        max_concurrency,
-        incr_concurrent,
-        decr_concurrent,
-        stop,
+        is_stopped,
         why_stopped,
       };
-      return reqs;
 
-      function incr_concurrent() {
-        reqs.concurrency++;
-      }
-      function decr_concurrent() {
-        reqs.concurrency--;
-      }
-      function stop() {
-        if (!reqs.queue.length) return true;
-        return reqs.concurrency >= reqs.max_concurrency;
+      function is_stopped() {
+        return !reqs.queue.length;
       }
       function why_stopped() {
-        if (!stop()) return undefined;
-        return !reqs.queue.length ? "queue empty" : "max concurrency";
+        if (!is_stopped()) return bucket.why_stopped();
+        return "queue empty";
       }
     }
 
-    function rpp_factory(period: fm.period, max: number): fm.p.limiter_rpp {
-      const rpp_period_ms = FetchManager.period_ms[period];
-      const rpp_tracker: number[] = [];
-      const rpp = { rate: 0, max, period, throttle, increment };
-      return rpp;
-      function throttle() {
-        rpp.rate = calc_rpp();
-        return rpp.rate >= max;
-      }
-      function increment() {
-        const now = new Date().valueOf();
-        rpp_tracker.push(now);
-      }
-      function calc_rpp() {
-        const period_ago = new Date().valueOf() - rpp_period_ms;
-        const index = rpp_tracker.findIndex((time) => time > period_ago);
-        if (index === -1) return rpp_tracker.length;
+    // create, access and query the rate bucket
+    function make_bucket(init_bucket?: fm.bucket): fm.p.limiter_bucket {
+      const ms = period_ms[init.period];
+      const interval_ms = Math.ceil(ms / init.max_rpp);
+      const interval = setInterval(() => add(), interval_ms);
+      const bucket: fm.bucket = init_bucket || {
+        uid,
+        max_rpp: init.max_rpp,
+        max_concurrency: init.max_concurrency,
+        period: init.period,
+        tokens: init.max_rpp,
+        concurrency: 0,
+        time: 0,
+      };
+      return {
+        interval,
+        is_full,
+        is_stopped,
+        why_stopped,
+        remove_token,
+        replace_token,
+        inc_concurrent,
+        dec_concurrent,
+        stamp_time,
+        get,
+        set,
+        kill,
+      };
 
-        rpp_tracker.splice(0, index);
-        return rpp_tracker.length;
+      function set(new_bucket: fm.bucket) {
+        if (new_bucket.period !== init.period)
+          return err.throw(uid, "periods must match", {
+            have: init.period,
+            got: new_bucket.period,
+          });
+        if (new_bucket.max_rpp !== init.max_rpp)
+          return err.throw(uid, "max_rpp must match", {
+            have: init.max_rpp,
+            got: new_bucket.max_rpp,
+          });
+        if (new_bucket.max_concurrency !== init.max_concurrency)
+          return err.throw(uid, "max_concurrency must match", {
+            have: init.max_concurrency,
+            got: new_bucket.max_concurrency,
+          });
+
+        const { tokens, concurrency } = new_bucket;
+        bucket.tokens = tokens;
+        bucket.concurrency = concurrency;
+      }
+
+      function get() {
+        return bucket;
+      }
+
+      function is_full() {
+        return bucket.tokens >= init.max_rpp;
+      }
+
+      function is_stopped() {
+        return bucket.concurrency >= init.max_concurrency || !bucket.tokens;
+      }
+
+      function why_stopped() {
+        if (bucket.concurrency >= init.max_concurrency)
+          return "max concurrency";
+        if (!bucket.tokens) return "rate limit exceeded";
+      }
+
+      function remove_token() {
+        if (!bucket.tokens) return;
+        bucket.tokens--;
+      }
+
+      function replace_token(err: Error) {
+        // Error was probably user invoked, and request more than likely reached the server.
+        // Do not replace the token in this case.
+        // @TODO - this logic needs more thought
+        if (err.name === "TimeoutError" || err.name === "AbortError") return;
+        // replace the spent token. Maybe network was down, etc...
+        add();
+      }
+
+      function inc_concurrent() {
+        bucket.concurrency++;
+      }
+
+      function dec_concurrent() {
+        if (!bucket.concurrency)
+          return err.warn(uid, "No concurrency to decrease");
+        bucket.concurrency--;
+      }
+
+      function add() {
+        if (is_full()) return;
+        bucket.tokens++;
+      }
+
+      function stamp_time() {
+        bucket.time = new Date().valueOf();
+      }
+
+      function kill() {
+        clearInterval(interval);
       }
     }
   };
 
+  /** Functionality related to argument parsing **/
   private args = {
-    constructor_opts: (
-      required_options: fm.opts.global<G>,
+    constructor_params: (
+      default_opts: fm.opts.global<G>,
       ...pms: fm.opts.instance<G>
     ) => {
-      const user_options: fm.opts.global<G> = pms[4] || {};
-      Object.entries(required_options).forEach((entry) => {
-        const [key, value] = entry as [keyof fm.opts.global<G>, any];
-        if (!user_options[key]) user_options[key] = value;
-      });
-      return user_options;
+      const bucket =
+        typeof pms[0] === "number" ? undefined : (pms[0] as fm.bucket);
+      let options =
+        typeof pms[0] === "number"
+          ? (pms[4] as fm.opts.global<G>) || {}
+          : (pms[2] as fm.opts.global<G>) || {};
+      options = { ...default_opts, ...options };
+      return typeof pms[0] === "number"
+        ? {
+            max_rpp: pms[0] as number,
+            max_concurrency: pms[1] as number,
+            period: pms[2] as fm.period,
+            targets: pms[3] as fm.opts.target[],
+            options,
+            bucket,
+          }
+        : {
+            max_rpp: bucket!.max_rpp,
+            max_concurrency: bucket!.max_concurrency,
+            period: bucket!.period,
+            targets: pms[1] as fm.opts.target[],
+            options,
+            bucket,
+          };
     },
 
-    ident_req_kind: (req_or_url: string | Request) => {
+    dedupe_targets: (targs: fm.opts.target<G>[], keys: string[]) => {
+      if (targs.length === keys.length) return {};
+
+      const filtered = {
+        used: {} as { [key: string]: fm.opts.target<G> },
+        rejected: {} as { [key: string]: fm.opts.target<G>[] },
+      };
+      const { used, rejected } = filtered;
+      targs.forEach((targ) => {
+        const key = typeof targ === "object" ? targ.target_key : targ;
+        rejected[key] ??= [];
+        if (!used[key]) return (used[key] = targ);
+        if (typeof targ === "object" && typeof used[key] === "string")
+          return (used[key] = targ);
+
+        if (typeof targ === "object") rejected[key]!.push(targ);
+      });
+
+      return {
+        used: Object.values(used),
+        rejected: Object.values(rejected).flat(),
+      };
+    },
+
+    /** Identify if the user has give a Request or ("url", RequestInit) kind */
+    ident_req_kind: (p: fm.fol.fetch_pms<G>) => {
+      const req_or_url: string | Request = p[0];
       const req_kind: fm.kind | undefined =
         req_or_url instanceof Request && req_or_url.url.length
           ? "req"
@@ -329,14 +553,15 @@ export default class FetchManager<G extends fm.kind> {
       return req_kind;
     },
 
-    fetch_overload_args: (
+    res_fetch_overload: (
       req_kind: fm.kind,
       ...pms: fm.fol.fetch_pms<G>
     ): fm.p.ctx_pms<G> => {
       return req_kind === "url" ? req_url_kind() : req_req_kind();
 
+      // Resolve a "rwq" kind of request
       function req_req_kind() {
-        const [req, opt_page, page] = pms.filter(empty_obj) as [
+        const [req, opt_page, page] = pms.filter(is_empty_obj) as [
           Request,
           fm.opts.fetch<G> | fm.cb.pager<G> | undefined,
           fm.cb.pager<G> | undefined,
@@ -353,8 +578,11 @@ export default class FetchManager<G extends fm.kind> {
         };
       }
 
+      // Resolve a "url" kind of request
       function req_url_kind() {
-        const [url, init_opt_page, opt_page, page] = pms.filter(empty_obj) as [
+        const [url, init_opt_page, opt_page, page] = pms.filter(
+          is_empty_obj,
+        ) as [
           string,
           RequestInit | fm.opts.fetch<G> | fm.cb.pager<G> | undefined,
           fm.opts.fetch<G> | fm.cb.pager<G> | undefined,
@@ -378,7 +606,7 @@ export default class FetchManager<G extends fm.kind> {
         };
       }
 
-      function empty_obj(obj: any) {
+      function is_empty_obj(obj: any) {
         if (obj instanceof Request) return true;
         return !(
           typeof obj === "object" &&
@@ -393,6 +621,7 @@ export default class FetchManager<G extends fm.kind> {
         const option_keys: (keyof fm.opts.fetch<G>)[] = [
           "skip_queue",
           "force_retry",
+          "abort_timeout",
           "response_cb",
           "trace_cb",
           "wait_cb",
@@ -402,24 +631,37 @@ export default class FetchManager<G extends fm.kind> {
       }
     },
 
-    make_ctx: (pms: fm.p.ctx_pms<G>): Partial<fm.p.ctx<G>> => {
-      const { hosts, limiter } = this;
-      const { options, url, req, req_init, pager_cb } = pms;
-      const host_string = hosts.hostname(url, req);
-      const host = limiter.hosts[host_string]!;
+    // The ctx is carried through the lifecycle of a request
+    make_ctx: (
+      target_key: string,
+      pms: fm.p.ctx_pms<G>,
+    ): Partial<fm.p.ctx<G>> => {
+      const { limiter } = this;
+      let { options, url, req, req_init, pager_cb } = pms;
+      options ??= {};
+      const target = limiter.target_options[target_key]!;
       const ctx_req: fm.p.ctx_req = { url, req_init, req };
       const page_collector = { user: [] as any[], system: [] as Response[] };
       const handlers = cascade_handlers();
+      let skip_queue = options.skip_queue || false;
+      if (options.force_retry && options.force_retry < 0) skip_queue = true;
+
+      const abort_timeout =
+        options.abort_timeout || target.abort_timeout || limiter.abort_timeout;
       return {
         ctx_req,
-        host_string,
-        skip_queue: false,
-        force_retry: 0,
+        target_key,
         page_collector,
-        ...(options || {}),
+        ...options,
         ...handlers,
+        skip_queue,
+        abort_timeout,
       };
 
+      // Merges the user handlers into the request context in order of priority:
+      // 1) defined in `fetch` method
+      // 2) defined in constructor target options
+      // 3) defined in contructor global options
       function cascade_handlers() {
         const handler_keys: (keyof fm.p.handlers<G>)[] = [
           "response_cb",
@@ -430,7 +672,8 @@ export default class FetchManager<G extends fm.kind> {
         const handlers = {
           pager_cb,
         } as fm.p.handlers<G> & { pager_cb?: fm.cb.pager<G> };
-        return [limiter, host, options].reduce((handlers, opts) => {
+
+        return [limiter, target, options].reduce((handlers, opts) => {
           handler_keys.forEach((key) => {
             if (opts && opts[key]) handlers[key] = opts[key] as any;
           });
@@ -439,253 +682,385 @@ export default class FetchManager<G extends fm.kind> {
       }
     },
 
-    do_hosts_clash: (
-      host_keys: string[],
-      limiters: typeof FetchManager.limiters,
-    ) => {
-      if (limiters.has(host_keys)) return false;
+    do_buckets_clash: (new_targs: string[], uid: string) => {
+      const { limiters, all_target_keys } = FetchManager;
+      if (limiters.has(uid)) return true;
 
-      const ex_hosts = [...limiters.keys()].flat();
-      const clashing_hosts = host_keys.reduce((clash_hosts, this_host) => {
-        const clash = ex_hosts.find((ex_host) => ex_host === this_host);
-        if (!clash) return clash_hosts;
-        clash_hosts.push(clash);
-        return clash_hosts;
-      }, [] as string[]);
+      const clashes: string[] = [];
+      new_targs.reduce((clashes, new_targ) => {
+        const clash = all_target_keys.find((ex_targ) => ex_targ === new_targ);
+        if (!clash) return clashes;
 
-      return clashing_hosts.length
-        ? `Hosts already defined in other groups: [ ${clashing_hosts.join(", ")} ]`
+        clashes.push(clash);
+        return clashes;
+      }, clashes);
+
+      return clashes.length
+        ? `Targets already defined in other groups: [ ${clashes.join(", ")} ]`
         : false;
     },
 
+    // Normalise request definition in context to {req?: Request, url? string, request_init?: RequestInit}
     to_ctx_req: (fm_req: fm.req<G>): fm.p.ctx_req => {
       if (fm_req instanceof Request) return { req: fm_req };
       return fm_req;
     },
 
+    // Convert context request back to given request shape.
     to_fm_req: (ctx_req: fm.p.ctx_req): fm.req<G> => {
       const { req, url, req_init } = ctx_req;
-      if (req) return req.clone() as fm.req<G>;
-      return { url, req_init } as fm.req<G>;
+      return req ? (req as fm.req<G>) : ({ url, req_init } as fm.req<G>);
+    },
+
+    url: (url?: string, req?: Request) => {
+      const url_string = req ? req.url : url!;
+      return new URL(url_string);
     },
   };
 
-  private hosts = {
-    make_debug_data: (ctx: fm.p.ctx<G>, mssg?: string): fm.trace_data => {
-      const { force_retry, host_string, skip_queue } = ctx;
-      const { rpp, reqs, paused } = this.limiter;
-      const href = this.hosts.href(ctx);
+  /** Functionality related to target parsing and shaping **/
+  private targets = {
+    make_trace_data: (ctx: fm.p.ctx<G>, mssg?: string): fm.trace_data => {
+      const { limiter, args } = this;
+      const { force_retry, target_key, skip_queue, ctx_req } = ctx;
+      const href = args.url(ctx_req.url, ctx_req.req).href;
+      const { max_concurrency, concurrency, max_rpp, tokens, period } =
+        limiter.bucket.get();
       return {
-        message: mssg,
-        paused: paused.ms,
-        stopped: reqs.why_stopped(),
-        rpp: rpp.rate,
-        rpp_max: rpp.max,
-        rpp_period: rpp.period,
-        concurrency: reqs.concurrency,
-        max_concurrency: reqs.max_concurrency,
-        queue: reqs.queue.length,
+        tokens,
+        message: mssg || limiter.reqs.why_stopped(),
+        paused: limiter.paused.ms,
+        concurrency,
+        max_concurrency,
+        max_rpp,
+        period,
+        queue: limiter.reqs.queue.length,
         force_retry,
         skip_queue,
-        host_string,
+        target_key,
         href,
+        time: new Date().valueOf(),
       };
     },
 
-    make_host_keys: (hosts: fm.host<G>[]) => {
-      const host_strings = hosts.map((host) => {
-        return typeof host === "string" ? host : host.host_string;
-      });
-      return [...new Set(host_strings)];
-    },
-
-    fm_to_ctx_hosts: (hosts: fm.host<G>[]) => {
-      const { err } = this;
-      return hosts.reduce(
-        reducer,
-        {} as { [host_string: string]: fm.p.host<G> },
-      );
+    // Normalise all given targets into {target_key: string, ...} shape
+    to_ctx_opts: (targs: fm.opts.target<G>[]) => {
+      const keyed_targs = {} as {
+        [target_key: string]: fm.opts.target_options<G>;
+      };
+      return targs.reduce(reducer, keyed_targs);
 
       function reducer(
-        hosts: { [host_string: string]: fm.p.host<G> },
-        fm_host: fm.host<G>,
+        keyed_targs: { [target_key: string]: fm.opts.target_options<G> },
+        target: fm.opts.target<G>,
       ) {
-        const is_host = typeof fm_host !== "string";
-        const host = is_host ? fm_host : { host_string: fm_host };
-        const { host_string } = host;
-        if (!hosts[host_string]) {
-          hosts[host_string] = host;
-          return hosts;
-        }
-        const mssg = `${host_string} is defined multiple times. Options from first instance retained`;
-        err.warn(mssg, host);
-        return hosts;
+        const is_object = typeof target === "object";
+        const targ_object = is_object ? target : { target_key: target };
+        const { target_key } = targ_object;
+        keyed_targs[target_key] = targ_object;
+        return keyed_targs;
       }
-    },
-
-    href: (context: fm.p.ctx<G>) => {
-      const { req, url } = context.ctx_req;
-      const url_string = req ? req.url : url!;
-      return new URL(url_string).href;
-    },
-
-    hostname: (url?: string, req?: Request) => {
-      const url_string = req ? req.url : url!;
-      let { hostname, port } = new URL(url_string);
-      hostname = port ? `${hostname}:${port}` : hostname;
-      return hostname;
     },
   };
 
+  /** Handle a request lifecycle including user callbacks **/
   private handle = {
+    // Route a failed request, either an Error or no Response.ok
     error: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { retry, trace, should_retry } = this.handle;
-      const { hosts, err } = this;
-      const href = hosts.href(ctx);
+      const { handle, args } = this;
+      const href = args.url(ctx.ctx_req.url, ctx.ctx_req.req).href;
       const mssg =
         resp instanceof Response
-          ? err.message(`${resp.status} ${resp.statusText} for ${href}.`)
-          : err.message(`Fetch errored before response for ${href}.`);
-      trace(ctx, mssg);
-      if (should_retry(ctx, resp)) return retry(ctx, resp);
+          ? `${resp.status} ${resp.statusText} for ${href}.`
+          : `Fetch errored before response for ${href}.`;
+      handle.trace(ctx, mssg);
+      // Retry the request if needed
+      if (handle.should_retry(ctx, resp)) return handle.retry(ctx, resp);
 
       ctx.reject(resp);
     },
 
+    // Check if a failed request should be retried
     should_retry: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { ctx_req, retry_cb, force_retry, reject } = ctx;
-      const req = this.args.to_fm_req(ctx_req);
-      if (force_retry) return true;
-      if (!retry_cb) return false;
+      const { args } = this;
+      const { err } = FetchManager;
+      const req = args.to_fm_req(ctx.ctx_req);
+      // force_retry overrides retry_cb
+      if (ctx.force_retry) return true;
+      if (!ctx.retry_cb) return false;
 
+      // Pass the response through the user's retry_cb
       try {
-        resp = resp instanceof Response ? resp.clone() : resp;
-        return retry_cb(resp, req);
-      } catch (err) {
-        reject(err);
+        // Clone the Response in case it's body needs to be read again
+        const resp_c = resp instanceof Response ? resp.clone() : resp;
+        return ctx.retry_cb(resp_c, req);
+      } catch (error) {
+        ctx.reject(err.ensure_error(error));
         return false;
       }
     },
 
+    //Handle a request retry
     retry: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { handle } = this;
-      let { force_retry } = ctx;
-      ctx.skip_queue = force_retry > 0 ? false : true;
-      if (force_retry)
-        ctx.force_retry = force_retry > 0 ? force_retry-- : force_retry++;
+      const { handle, queue_req } = this;
+      if (ctx.force_retry) {
+        ctx.skip_queue = ctx.force_retry > 0 ? false : true;
+        ctx.force_retry > 0 ? ctx.force_retry-- : ctx.force_retry++;
+      }
       handle.pause(ctx, resp);
-      this.queue_req(ctx);
+      queue_req(ctx);
     },
 
-    pause: (ctx: fm.p.ctx<G>, resp: Response | Error) => {
-      const { wait_cb, reject, ctx_req } = ctx;
-      const { paused, wait_ms } = this.limiter;
-      const ms = wait_ms;
-      if (!wait_cb) return paused.set_state(ms);
+    // Handle queue pausing
+    pause: async (ctx: fm.p.ctx<G>, resp: Response | Error) => {
+      const { limiter, args } = this;
+      const { err } = FetchManager;
+      // The user's wait_cb takes precedence over the default wait_ms
+      let ms = ctx.wait_cb ? await try_wait_cb() : limiter.wait_ms;
+      if (
+        ctx.force_retry &&
+        ctx.force_retry > 0 &&
+        limiter.reqs.queue.length &&
+        !ctx.wait_cb
+      ) {
+        // The request is retrying from the back of a non-empty queue.
+        // We do not want to pause the queue in front of it.
+        // We want to honor the remainder of the paused time once it reaches the front.
+        // If the user has set wait_cb, this block is negated, and the queue is paused immediately
+        ctx.paused = () => {
+          clearInterval(pause);
+          delete ctx.paused;
+          limiter.paused.set_pause(ms, ctx);
+        };
+        const pause = setInterval(() => {
+          if (ms <= 0) return clearInterval(pause);
+          ms = Math.max(0, ms - limiter.heartbeat_ms);
+        }, limiter.heartbeat_ms);
 
-      try {
-        const { to_fm_req } = this.args;
-        resp = resp instanceof Response ? resp.clone() : resp;
-        const ms = wait_cb(resp, to_fm_req(ctx_req));
-        paused.set_state(ms);
-      } catch (err) {
-        reject(err);
+        return 0;
+      }
+      return limiter.paused.set_pause(ms, ctx);
+
+      // execute the user's wait_cb
+      async function try_wait_cb() {
+        try {
+          return ctx.wait_cb!(resp, args.to_fm_req(ctx.ctx_req));
+        } catch (error) {
+          ctx.reject(err.ensure_error(error));
+          return 0;
+        }
       }
     },
 
-    trace: (context: fm.p.ctx<G>, mssg?: string) => {
-      const { trace_cb } = context;
-      const { make_debug_data } = this.hosts;
-      if (!trace_cb) return;
+    // Handle the user's trace_cb
+    trace: (ctx: fm.p.ctx<G>, mssg?: string) => {
+      const { targets } = this;
+      if (!ctx.trace_cb) return;
 
-      const data = make_debug_data(context, mssg);
-      trace_cb(data);
+      const data = targets.make_trace_data(ctx, mssg);
+      ctx.trace_cb(data);
     },
 
+    // Handle the user's pager_cb
     pager: async (
       ctx: fm.p.ctx<G>,
       resp: Response,
       pager_cb: fm.cb.pager<G>,
     ) => {
       const { queue_req, args } = this;
-      const { to_fm_req } = args;
-      const { response_cb, resolve, reject, ctx_req, page_collector } = ctx;
-      const { user, system } = page_collector;
-      const req = to_fm_req(ctx_req);
+      const { err } = FetchManager;
+      const req = args.to_fm_req(ctx.ctx_req);
       let new_req: fm.p.pager_cb_rtn<G>;
       try {
+        // Clone the response in case it's body needs to be read again
         new_req = await pager_cb(resp.clone(), req, user_collector);
-      } catch (err) {
-        reject(err);
+      } catch (error) {
+        return ctx.reject(err.ensure_error(error));
       }
-      system.push(resp);
+
+      ctx.page_collector.system.push(resp);
       if (new_req) {
-        ctx.skip_queue = true;
+        ctx.skip_queue = true; // Always page from the front of the queue
         ctx.ctx_req = args.to_ctx_req(new_req);
         return queue_req(ctx);
       }
-      if (user.length) return resolve(user);
-      if (!response_cb) return resolve(system);
+      if (ctx.page_collector.user.length)
+        // The user has used the `collect` function. Resolve that data
+        return ctx.resolve(ctx.page_collector.user);
+
+      // There is no user response_cb, so return an Array of Responses
+      if (!ctx.response_cb) return ctx.resolve(ctx.page_collector.system);
+
+      // User has defined response_cb, so resolve all returned values into an array.
       try {
         const resp_array = await Promise.all(
-          system.map((res) => response_cb(res, req)),
+          ctx.page_collector.system.map((res) => ctx.response_cb!(res, req)),
         );
-        resolve(resp_array);
-      } catch (err) {
-        reject(err);
+        ctx.resolve(resp_array);
+      } catch (error) {
+        ctx.reject(err.ensure_error(error));
       }
 
+      // Flatten arrays of arrays, except if `merge` === false
       function user_collector(payload: any[] | any, merge = true) {
         if (Array.isArray(payload) && merge) {
-          payload.forEach((val) => user.push(val));
+          payload.forEach((val) => ctx.page_collector.user.push(val));
           return;
         }
 
-        user.push(payload);
+        ctx.page_collector.user.push(payload);
       }
     },
   };
 
-  private err = {
-    message: (mssg: string) => {
-      return `[${this.class_name}] ${mssg}`;
+  public uid: string;
+  private target_keys: string[];
+  private get limiter() {
+    return FetchManager.limiters.get(this.uid)! as fm.p.limiter<G>;
+  }
+
+  /* **********************************************
+   * Start static members
+   * ********************************************** */
+
+  /**
+   * # Static access to all buckets
+   * Buckets can be accessed by the group uid, or found by a target key within the group
+   * */
+  public static bucket = {
+    /**
+     * # Get an instance bucket
+     * @param key_or_uid [string] The instance uid or a target key within the instance
+     * @returns [fm.bucket]
+     * */
+    get: (key_or_uid: string) => {
+      const { find_uid, limiters } = this;
+      const uid = limiters.has(key_or_uid) ? key_or_uid : find_uid(key_or_uid);
+      return uid ? limiters.get(uid)!.bucket.get() : undefined;
     },
 
-    reject: (mssg: string, ...warn: any[]) => {
-      if (warn && warn.length) this.err.warn(mssg, ...warn);
-      mssg = this.err.message(mssg);
-      return new Promise((_res, rej) => rej(mssg));
-    },
+    /**
+     * # Update an instance bucket
+     * @param key_or_uid [string] The instance uid or a target key within the instance
+     * @param bucket [fm.bucket] The bucket uid and limit settings must match the existing bucket
+     * */
+    set: (key_or_uid: string, bucket: fm.bucket) => {
+      const { find_uid, err, limiters, target_groups } = this;
+      const uid = limiters.has(key_or_uid) ? key_or_uid : find_uid(key_or_uid);
+      if (!uid) {
+        return err.throw("", "No target group found", key_or_uid, {
+          groups: Object.fromEntries(target_groups.entries()),
+        });
+      }
 
-    throw: (mssg: string, ...details: any[]) => {
-      const cause = { message: mssg, details };
-      throw Error(this.err.message(mssg), { cause });
-    },
-
-    warn: (mssg: string, ...data: any[]) => {
-      mssg = this.err.message(mssg);
-      console.warn(mssg, ...data);
+      const limiter = limiters.get(uid)!;
+      limiter.bucket.set(bucket);
     },
   };
 
-  private get limiter() {
-    if (this.static_limiter) return this.static_limiter!;
-    return (this.static_limiter = FetchManager.limiters.get(
-      this.host_keys,
-    )! as fm.p.limiter<G>);
+  /**
+   * # Get a static map of all buckets
+   * @returns `{[uid: string]: fm.bucket}` - A map of buckets keyed by uid.
+   * */
+  public static get buckets(): { [uid: string]: fm.bucket } {
+    const { limiters } = this;
+    const entries = limiters
+      .keys()
+      .map((uid) => [uid, limiters.get(uid)!.bucket.get()]);
+    return Object.fromEntries(entries);
   }
 
-  private host_keys: string[];
-  private static_limiter?: fm.p.limiter<G>;
-  private class_name = this.constructor.name;
-  private heartbeat: any = null;
+  /**
+   * # Get a static map of all targets
+   * @returns `{[uid: string]: target_key[]}` - A map of target groups keyed by uid.
+   * */
+  public static get targets() {
+    return Object.fromEntries(this.target_groups.entries());
+  }
 
-  private static limiters = new Map<string[], fm.p.limiter<fm.kind>>();
-  private static period_ms = (() => {
-    const sec = 1000;
-    const min = sec * 60;
-    const hr = min * 60;
-    const day = hr * 24;
-    return { sec, min, hr, day };
-  })();
+  /**
+   * # Converts a target group into uid and keys
+   * @param targets [Array<fm.target>] the target group
+   * @returns [{uid: string, target_keys: Array<string>}]
+   * */
+  public static hash = hash;
+
+  /** Error messaging handling **/
+  private static err = {
+    message: (uid: string, mssg: string) => {
+      if (uid.length) uid = ` [${uid}]`;
+      return `[${this.class_name}]${uid} ${mssg}`;
+    },
+
+    reject: (uid: string, mssg: unknown, ...reasons: any[]) => {
+      if (typeof mssg !== "string")
+        return Promise.reject(this.err.ensure_error(mssg));
+
+      mssg = this.err.message(uid, mssg);
+      const err = Error(mssg as string, { cause: reasons });
+      return Promise.reject(err);
+    },
+
+    throw: (uid: string, mssg: string, ...details: any[]) => {
+      throw Error(this.err.message(uid, mssg), { cause: details });
+    },
+
+    warn: (uid: string, mssg: string, ...data: any[]) => {
+      mssg = this.err.message(uid, mssg);
+      console.warn(mssg, ...data);
+    },
+
+    ensure_error: (err: unknown) => {
+      return err instanceof Error
+        ? err
+        : typeof err === "string"
+          ? Error(err)
+          : typeof err === "number"
+            ? Error(String(err))
+            : typeof err === "object" &&
+                Object.hasOwn(err!, "toString") &&
+                err!.toString instanceof Function
+              ? Error(err!.toString())
+              : typeof err === "object"
+                ? Error(JSON.stringify(err))
+                : Error("undefined error");
+    },
+  };
+
+  /** Find a group uid from a member target key **/
+  private static find_uid = (target_key: string) => {
+    const { target_groups } = this;
+    const entry = target_groups
+      .entries()
+      .find(([_uid, targets]) => targets.includes(target_key));
+    return entry ? entry[0] : undefined;
+  };
+
+  /** Set a limiter into the static limiter map **/
+  private static set_limiter = (
+    target_keys: string[],
+    hash_id: string,
+    limiter: fm.p.limiter<fm.kind>,
+  ) => {
+    const { limiters, target_groups } = this;
+    limiters.set(hash_id, limiter);
+    target_groups.set(hash_id, target_keys);
+    // We sort all target keys to enable finding keys with pathnames first (longest first)
+    this.all_target_keys = [...this.all_target_keys, ...target_keys].sort(
+      (a, b) => b.length - a.length,
+    );
+  };
+
+  private static class_name: string;
+  private static all_target_keys: string[] = [];
+  private static target_groups = new Map<string, string[]>();
+  private static limiters = new Map<string, fm.p.limiter<fm.kind>>();
 }
+
+const period_ms = (() => {
+  const sec = 1000;
+  const min = sec * 60;
+  const hr = min * 60;
+  const day = hr * 24;
+  return { sec, min, hr, day };
+})();

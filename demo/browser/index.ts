@@ -16,16 +16,13 @@
  */
 
 import FetchManager from "fetch-man";
-import LibFetch from "fetch-man/lib"; // FetchManager ships a convenience library of handler callbacks
-import { WikiApi } from "./lib/WikiApi.ts";
-import { Tui } from "./lib/Tui"; // Terminal User Interface (TUI)
-import type { w } from "./lib/wiki_types";
+import LibFetch from "fetch-man/lib";
+import { WikiApi } from "../wikidata/lib/WikiApi.ts";
+import type { w } from "../wikidata/lib/wiki_types";
 
 const lib_fetch = new LibFetch();
 const language = "en";
 const wiki = new WikiApi(language);
-const args = process.argv.slice(2);
-const log_debug = args[0];
 
 /* ---------------------------------------------------
  *  Set up a FetchManager instance
@@ -42,8 +39,6 @@ const handlers: {
   pager: fm.cb.pager<"req">;
 } = {
   trace: (trace_data) => {
-    if (log_debug) return console.debug(trace_data);
-
     let { paused, message, concurrency, tokens, href } = trace_data;
     let log: string[] = [];
     const det = message && message !== "queue empty";
@@ -52,7 +47,7 @@ const handlers: {
     det && concurrency && log.push(`concurrency: ${concurrency}`);
     log.length && log.push(`tokens: ${tokens}`);
     !log.length && log.push(`Fetching: ${decodeURI(href)}\r`);
-    tui.log(log);
+    console.log(log);
   },
 
   response: <K>() => {
@@ -95,6 +90,8 @@ const fm = new FetchManager(
 /* ---------------------------------------------------
  *  Proceed with user application logic
  * --------------------------------------------------- */
+search("fetch").then((data) => console.log(data));
+
 async function search(
   term: string,
   limit?: number,
@@ -116,61 +113,3 @@ async function search(
     throw err;
   });
 }
-
-async function explore(topic: string) {
-  const req = wiki.explore(topic);
-  const response_cb = handlers.response<w.resp.explore>();
-
-  const explore_res = await fm
-    .fetch<w.resp.explore>(req, {
-      response_cb,
-    })
-    .then((data) => data.entities)
-    .catch(handle_err);
-
-  const claims_entity = wiki.claims_entity(explore_res, topic);
-  if (!claims_entity) return handle_parse_err(topic);
-
-  const pids = Object.keys(claims_entity.claims);
-  const props_entity = await definitions(pids);
-  return { claims_entity, props_entity };
-}
-
-async function definitions(ids: string[]) {
-  const batched_req = wiki.definitions(ids);
-  const batched = await Promise.all(batched_req.map(fetch_batch));
-  const defs_res = wiki.merge_definitions(batched.flat());
-  const defs_entity = wiki.defs_entity(defs_res);
-  return defs_entity ? defs_entity : handle_parse_err(ids.join(", "));
-
-  async function fetch_batch(req: Request) {
-    const response_cb = handlers.response<w.resp.defs>();
-    return fm
-      .fetch<w.resp.defs>(req, { response_cb })
-      .then((defs) => defs.entities)
-      .catch(handle_err);
-  }
-}
-
-function handle_err(err: any): never {
-  if (err instanceof Response) throw `${err.status} - ${err.statusText}`;
-  throw err;
-}
-
-function handle_parse_err(topic: string): never {
-  const mssg = `Failed to parse data for ${topic}`;
-  throw mssg;
-}
-
-const tui = new Tui(search, explore, definitions);
-tui.init_query();
-
-/* ---------------------------------------------------
- *  Local type exports
- * --------------------------------------------------- */
-export type search = typeof search;
-export type explore = typeof explore;
-export type definitions = typeof definitions;
-export type explore_result = Awaited<ReturnType<explore>>;
-export type search_result = Awaited<ReturnType<search>>;
-export type def_result = Awaited<ReturnType<definitions>>;
