@@ -59,7 +59,7 @@ class FetchManager {
       wait_ms: 500,
       heartbeat: 20
     };
-    const p = args.constructor_params(default_opts, ...params);
+    const p = args.res_constructor(default_opts, ...params);
     if (!p.targets.length)
       err.throw("", "No targets given in constructor", params);
     const { target_keys, uid } = hash(p.targets);
@@ -140,9 +140,9 @@ class FetchManager {
   queue_req = async (part_ctx) => {
     const { fetch_factory, limiter } = this;
     const { skip_queue, resolve } = part_ctx;
-    const is_retry = resolve ? part_ctx : undefined;
-    if (is_retry) {
-      const req_fn = fetch_factory(is_retry);
+    const retry_ctx = resolve ? part_ctx : undefined;
+    if (retry_ctx) {
+      const req_fn = fetch_factory(retry_ctx);
       skip_queue ? limiter.reqs.queue.unshift(req_fn) : limiter.reqs.queue.push(req_fn);
       return;
     }
@@ -314,22 +314,22 @@ class FetchManager {
         kill
       };
       function set(new_bucket) {
-        if (new_bucket.period !== init.period)
+        const { tokens, concurrency, period, max_rpp, max_concurrency } = new_bucket;
+        if (period !== init.period)
           return err.throw(uid, "periods must match", {
             have: init.period,
-            got: new_bucket.period
+            got: period
           });
-        if (new_bucket.max_rpp !== init.max_rpp)
+        if (max_rpp !== init.max_rpp)
           return err.throw(uid, "max_rpp must match", {
             have: init.max_rpp,
-            got: new_bucket.max_rpp
+            got: max_rpp
           });
-        if (new_bucket.max_concurrency !== init.max_concurrency)
+        if (max_concurrency !== init.max_concurrency)
           return err.throw(uid, "max_concurrency must match", {
             have: init.max_concurrency,
-            got: new_bucket.max_concurrency
+            got: max_concurrency
           });
-        const { tokens, concurrency } = new_bucket;
         bucket2.tokens = tokens;
         bucket2.concurrency = concurrency;
       }
@@ -337,6 +337,8 @@ class FetchManager {
         return bucket2;
       }
       function is_full() {
+        if (bucket2.tokens > init.max_rpp)
+          bucket2.tokens = init.max_rpp;
         return bucket2.tokens >= init.max_rpp;
       }
       function is_stopped() {
@@ -362,6 +364,8 @@ class FetchManager {
         bucket2.concurrency++;
       }
       function dec_concurrent() {
+        if (bucket2.concurrency < 0)
+          bucket2.concurrency = 0;
         if (!bucket2.concurrency)
           return err.warn(uid, "No concurrency to decrease");
         bucket2.concurrency--;
@@ -380,7 +384,7 @@ class FetchManager {
     }
   };
   args = {
-    constructor_params: (default_opts, ...pms) => {
+    res_constructor: (default_opts, ...pms) => {
       const bucket = typeof pms[0] === "number" ? undefined : pms[0];
       let options = typeof pms[0] === "number" ? pms[4] || {} : pms[2] || {};
       options = { ...default_opts, ...options };
@@ -703,6 +707,11 @@ class FetchManager {
       limiter.bucket.set(bucket);
     }
   };
+  static get buckets() {
+    const { limiters } = this;
+    const entries = limiters.keys().map((uid) => [uid, limiters.get(uid).bucket.get()]);
+    return Object.fromEntries(entries);
+  }
   static get targets() {
     return Object.fromEntries(this.target_groups.entries());
   }
@@ -728,7 +737,11 @@ class FetchManager {
       console.warn(mssg, ...data);
     },
     ensure_error: (err) => {
-      return err instanceof Error ? err : typeof err === "string" ? Error(err) : typeof err === "number" ? Error(String(err)) : typeof err === "object" && Object.hasOwn(err, "toString") && err.toString instanceof Function ? Error(err.toString()) : typeof err === "object" ? Error(JSON.stringify(err)) : Error("undefined error");
+      try {
+        return err instanceof Error ? err : typeof err === "string" ? Error(err) : typeof err === "number" ? Error(String(err)) : typeof err === "object" && Object.hasOwn(err, "toString") && err.toString instanceof Function ? Error(err.toString()) : typeof err === "object" ? Error(JSON.stringify(err)) : Error("unknown error");
+      } catch (_err) {
+        return Error("unknown error");
+      }
     }
   };
   static find_uid = (target_key) => {
@@ -737,10 +750,10 @@ class FetchManager {
     return entry ? entry[0] : undefined;
   };
   static set_limiter = (target_keys, hash_id, limiter) => {
-    const { limiters, target_groups } = this;
+    const { limiters, target_groups, all_target_keys } = this;
     limiters.set(hash_id, limiter);
     target_groups.set(hash_id, target_keys);
-    this.all_target_keys = [...this.all_target_keys, ...target_keys].sort((a, b) => b.length - a.length);
+    this.all_target_keys = [...all_target_keys, ...target_keys].sort((a, b) => b.length - a.length);
   };
   static class_name;
   static all_target_keys = [];

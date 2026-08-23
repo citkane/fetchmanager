@@ -15,8 +15,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import FetchManager from "fetch-man";
-import LibFetch from "fetch-man/lib";
+import FetchManager from "fetch-manager";
+import LibFetch from "fetch-manager/lib";
 import { WikiApi } from "../wikidata/lib/WikiApi.ts";
 import type { w } from "../wikidata/lib/wiki_types";
 

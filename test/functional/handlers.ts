@@ -1,4 +1,4 @@
-import FetchManager from "fetch-man";
+import FetchManager from "fetch-manager";
 import { test, describe, expect } from "bun:test";
 
 const urls = {

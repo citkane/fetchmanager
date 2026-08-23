@@ -15,8 +15,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import FetchManager from "fetch-man";
-import LibFetch from "fetch-man/lib"; // FetchManager ships a convenience library of handler callbacks
+import FetchManager from "fetch-manager";
+import LibFetch from "fetch-manager/lib"; // FetchManager ships a convenience library of handler callbacks
 import { WikiApi } from "./lib/WikiApi.ts";
 import { Tui } from "./lib/Tui"; // Terminal User Interface (TUI)
 import type { w } from "./lib/wiki_types";

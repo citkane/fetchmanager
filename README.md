@@ -1,4 +1,4 @@
-# fetch-man (Fetch Manager)
+# Fetch Manager
 A zero dependency TS wrapper around native Javascript `fetch` providing management of:
 - rate limiting
 - concurrency
@@ -30,7 +30,7 @@ For Node, Bun and the browser (and probably Deno too).
 This will act upon a unique set of targets.
 
 ```ts
-import FetchManager from "fetch-man";
+import FetchManager from "fetch-manager";
 
 const time_period = "min";
 const rpp_max = 200;        // Maximum Requests Per Period (rpp) ie. the rate limit
@@ -562,10 +562,10 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 ## Installation
 [top](#toc)
 ```bash
-bun i @citkane/fetch-man # NPM
+bun i @citkane/fetch-manager # NPM
 bun i citkane/fetchmanager#v0.1.0 #Github
 
-npm i @citkane/fetch-man # NPM
+npm i @citkane/fetch-manager # NPM
 npm i citkane/fetchmanager#v0.1.0 #Github
 
 ```
@@ -578,7 +578,7 @@ Fetch Manager types are under the `fm` namespace. They are annotated with exampl
 ### LibFetch
 A library of off the shelf re-usable callbacks:
 ```ts
-import LibFetch from "fetch-man/lib";
+import LibFetch from "fetch-manager/lib";
 const lib_fetch = new LibFetch();
 const wait_cb = lib_fetch.wait.backoff_factory()
 const retry_cb = lib_fetch.retry...
@@ -600,8 +600,8 @@ bun run_tests
 Try a rather nifty WikiData explorer!
 ```bash
 # If you have installed Fetch Manager as a module:
-node ./node_modules/fetch-man/demo/wikidata.js
-bun ./node_modules/fetch-man/demo/wikidata.js
+node ./node_modules/fetch-manager/demo/wikidata.js
+bun ./node_modules/fetch-manager/demo/wikidata.js
 
 # If you have cloned the repository:
 node ./demo/wikidata.js

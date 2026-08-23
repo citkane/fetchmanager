@@ -1,5 +1,5 @@
 {
-  "name": "fetch-man",
+  "name": "fetch-manager",
   "version": "0.1.0",
   "module": "./src/FetchManager.ts",
   "devDependencies": {
