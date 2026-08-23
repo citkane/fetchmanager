@@ -1,7 +1,19 @@
 {
   "name": "fetch-manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "module": "./src/FetchManager.ts",
+  "description": "Wraps native JS fetch to manage rate limits, concurrency, paging, retry, response data",
+  "keywords": [
+    "fetch",
+    "rate",
+    "limit",
+    "limiter",
+    "rate limiter",
+    "concurrency",
+    "pager",
+    "paging",
+    "retry"
+  ],
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "@types/node": "^26.1.2"
