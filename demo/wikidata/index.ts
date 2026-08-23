@@ -1,5 +1,22 @@
-import FetchManager from "fetchmanager";
-import LibFetch from "fetchmanager/lib"; // FetchManager ships a convenience library of handler callbacks
+/*
+ * Copyright (C) 2026 Michael Jonker
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+import FetchManager from "fetch-man";
+import LibFetch from "fetch-man/lib"; // FetchManager ships a convenience library of handler callbacks
 import { WikiApi } from "./lib/WikiApi.ts";
 import { Tui } from "./lib/Tui"; // Terminal User Interface (TUI)
 import type { w } from "./lib/wiki_types";
@@ -63,7 +80,7 @@ const handlers: {
   wait: lib_fetch.wait.backoff_factory(),
 };
 
-const fetch_wiki = new FetchManager(
+const fm = new FetchManager(
   rpp_max,
   concurrency_max,
   time_period,
@@ -73,7 +90,7 @@ const fetch_wiki = new FetchManager(
     retry_cb: handlers.retry,
     trace_cb: handlers.trace,
   },
-).fetch;
+);
 
 /* ---------------------------------------------------
  *  Proceed with user application logic
@@ -83,7 +100,7 @@ async function search(
   limit?: number,
   next?: w.resp.search["continue"],
 ): Promise<w.search_res> {
-  const req = wiki.search(term, limit, next); //, ["P31=Q3624078"]);
+  const req = wiki.search(term, limit, next);
   const pager_cb = handlers.pager;
   const response_cb = handlers.response<w.resp.search>();
 
@@ -92,8 +109,8 @@ async function search(
 
   return (
     limit
-      ? fetch_wiki<w.resp.search>(...fetch_params)
-      : fetch_wiki<w.resp.search["query"]["search"]>(...paged_params)
+      ? fm.fetch<w.resp.search>(...fetch_params)
+      : fm.fetch<w.resp.search["query"]["search"]>(...paged_params)
   ).catch((err) => {
     if (err instanceof Response) throw `${err.status} - ${err.statusText}`;
     throw err;
@@ -104,9 +121,10 @@ async function explore(topic: string) {
   const req = wiki.explore(topic);
   const response_cb = handlers.response<w.resp.explore>();
 
-  const explore_res = await fetch_wiki<w.resp.explore>(req, {
-    response_cb,
-  })
+  const explore_res = await fm
+    .fetch<w.resp.explore>(req, {
+      response_cb,
+    })
     .then((data) => data.entities)
     .catch(handle_err);
 
@@ -127,7 +145,8 @@ async function definitions(ids: string[]) {
 
   async function fetch_batch(req: Request) {
     const response_cb = handlers.response<w.resp.defs>();
-    return fetch_wiki<w.resp.defs>(req, { response_cb })
+    return fm
+      .fetch<w.resp.defs>(req, { response_cb })
       .then((defs) => defs.entities)
       .catch(handle_err);
   }
