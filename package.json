@@ -18,5 +18,12 @@
     "run_tests": "bun test --pool-1 --bail",
     "build_wikidata": "bun build --minify --target=node --outfile=demo/wikidata.js demo/wikidata/",
     "build_browser": "bun build --target=browser --outfile=demo/browser/index.js demo/browser/"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/citkane/fetchmanager.git"
+  },
+  "homepage": "https://github.com/citkane/fetchmanager",
+  "license": "GPL-3.0",
+  "author": "Michael Jonker"
 }
