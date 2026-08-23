@@ -562,8 +562,8 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 ## Installation
 [top](#toc)
 ```bash
-bun i fetch-manager # NPM
-bun i citkane/fetchmanager#v0.1.0 #Github
+bun add fetch-manager # NPM
+bun add citkane/fetchmanager#v0.1.0 #Github
 
 npm i fetch-manager # NPM
 npm i citkane/fetchmanager#v0.1.0 #Github
@@ -588,9 +588,9 @@ const retry_cb = lib_fetch.retry...
 ### Tests
 Tests are made for the Bun framework. You can examine these to better understand the expectations for various aspects of the library.
 ```bash
-git clone https://github.com/citkane/fetchmanager
+git clone https://github.com/citkane/fetchmanager.git
 cd fetchmanager
-bun init
+bun install
 bun run_tests
 ```
 
