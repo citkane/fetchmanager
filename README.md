@@ -5,7 +5,7 @@ A zero dependency wrapper around native Javascript `fetch` providing management 
 - paging
 - response data
 
-For Node, Bun and the broowser (and probably Deno too).
+For Node, Bun and the browser (and probably Deno too).
 ### toc
 - [Basic Usage](#basic-usage)
 - [Core concepts](#core-concepts)
@@ -208,6 +208,8 @@ type trace_data = {
 </details>
 
 ## Aborting
+[top](#toc)
+
 Native Javascript `fetch` uses [signals](https://developer.mozilla.org/en-US/docs/Web/API/Request/signal) to manage user controlled aborts.
 This is compatible with Fetch Manager, eg.
 ```ts
@@ -215,6 +217,7 @@ let count = 0;
 const controller = new AbortController();
 const { signal } = controller;
 signal.addEventListener("abort", () => console.log("abort", count));
+
 const response_cb: fm.cb.resp = (resp, _req) => {
     count ++;
     if(count > 1) controller.abort()
@@ -419,7 +422,7 @@ All of `important_stuff` will thus be requested before `buggy_endpoint` retries.
 There are some quirks to this behaviour:
 - If the default retry wait is set to 500ms, `important_stuff` will proceed immediately and not wait on the buggy failure.
 - If `important_stuff` consumes 300ms to complete it's requests, then `buggy_endpoint` will wait the remaining 200ms before retrying.
-- if the user has provided `wait_cb`, and it returns eg. 1000ms (maybe a rate limit is being imposed) - then the whole queue, including `important_stuff`, will wait for 1000ms
+- if the user has provided `wait_cb`, and it returns eg. 1000ms (maybe a rate penalty is being imposed) - then the whole queue, including `important_stuff`, will wait for 1000ms
 
 We can also do the inverse, and prioritise request retries to the front of the queue.
 ```ts
