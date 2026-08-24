@@ -60,6 +60,7 @@ export class Tui {
     const width = this.layout.screen_width();
     let mssg_str = mssg.join(" | ");
     mssg_str = mssg_str.length > width ? mssg_str.slice(0, width) : mssg_str;
+    process.stdout.write(" ".repeat(width) + "\r");
     process.stdout.write(`${mssg_str}\r`);
   };
   private search = async (
