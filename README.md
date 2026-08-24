@@ -38,7 +38,8 @@ const concurrency_max = 3;  // Maximum active requests at any given time
 const fm = new FetchManager(rpp_max, concurrency_max, time_period, [
   "foo.domain.com",
   "bar.domain.com",
-  "baz.domain.com/api",      // Targets can be "URL.host" or "URL.host + URL.pathname" 
+    // Targets can be also "URL.host" or "URL.host + URL.pathname"
+  "baz.domain.com/api",
 ]);
 ```
 
@@ -49,8 +50,10 @@ Use it akin to native `fetch`
 ```ts
 const foo_res = await fm.fetch("https://foo.domain.com/api").catch((err) => {
     // `err` is one of: 
-    if (err instanceof Error) throw err;    // if no `Response` then `Error`
-    console.error(err.status);              // if no `Response.ok` then `Response`
+    // if no `Response` then `Error`
+    if (err instanceof Error) throw err;    
+    // if no `Response.ok` then `Response`
+    console.error(err.status);              
 });
 ```
 
@@ -63,7 +66,8 @@ const response_cb: fm.cb.resp = async (resp, _req) => {
 };
 
 const req = new Request("https://bar.domain.com/api")
-const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }); // `bar` is now typed
+// `bar` will be typed
+const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }); 
 ```
 
 ### example (3)
@@ -77,7 +81,9 @@ const handlers: {
 } = {
     // Should a failed request be retried?
     retry_cb: (resp, _req) => {
-      return resp instanceof Error ? false : [503, 429].includes(resp.status);
+      return resp instanceof Error ? 
+        false : 
+        [503, 429].includes(resp.status);
     },
     // How long to pause the queue before retrying?
     wait_cb: (resp, _req) => {
@@ -95,7 +101,9 @@ const baz = await fm.fetch(
     // Ensure that your global `fetch` is capable of accepting the non-standard shape. 
     { tls: { rejectUnauthorized: false } } as RequestInit, 
     handlers,
-); // Now, unless there is some failure outside of 503 or 429, baz is guaranteed a Response.ok
+);
+// Unless there is some failure outside of 503 or 429, baz is guaranteed a Response.ok
+
 ```
 
 ## Core concepts
@@ -190,8 +198,11 @@ so be mindful of the resources it may consume.
 example:
 Log the amount of request tokens remaining for the period, else a message indicating why the queue is stopped.
 ```ts
-const trace_cb: fm.cb.trace = (trace_data) => console.debug(trace_data.message || trace_data.tokens);
-const fm = new FetchManager(..., options: { trace_cb })
+const trace_cb: fm.cb.trace = (trace_data) => {
+    console.debug(trace_data.message || trace_data.tokens);
+}
+const fm = new FetchManager(..., { trace_cb })
+
 ```
 
 <details>
@@ -200,19 +211,19 @@ const fm = new FetchManager(..., options: { trace_cb })
 ```ts
  
 type trace_data = {
-    message?: string;                               // Information about the queue state
-    paused?: number;                                // For how many ms is the queue paused
-    tokens: number;                                 // How many request tokens remain for the period
-    max_rpp: number;                                // The maximum amount of requests allowed for the period
-    period: fm.period;                              // "sec" | "min" | "hr" | "day"
-    concurrency: number;                            // How many requests are currently active
-    max_concurrency: number;                        // Maximum concurrent requests allowed
-    queue: number;                                  // The length of the request queue
-    skip_queue: boolean;                            // Is the active request skipping the queue
-    force_retry: number;                            // The amount of retries remaining for the request
-    target_key: string;                             // The key of the requests limiter bucket
-    href: string;                                   // The href of the current request
-    time: number;                                   // Unix Epoch (ms)
+    message?: string;           // Information about the queue state
+    paused?: number;            // For how many ms is the queue paused
+    tokens: number;             // How many request tokens remain for the period
+    max_rpp: number;            // The maximum amount of requests allowed for the period
+    period: fm.period;          // "sec" | "min" | "hr" | "day"
+    concurrency: number;        // How many requests are currently active
+    max_concurrency: number;    // Maximum concurrent requests allowed
+    queue: number;              // The length of the request queue
+    skip_queue: boolean;        // Is the active request skipping the queue
+    force_retry: number;        // The amount of retries remaining for the request
+    target_key: string;         // The key of the requests limiter bucket
+    href: string;               // The href of the current request
+    time: number;               // Unix Epoch (ms)
 };
 
 ```
@@ -238,13 +249,15 @@ const response_cb: fm.cb.resp = (resp, _req) => {
 const promises = [...Array(4)].map(
     () => fm.fetch("https://foo.com", { signal }, { response_cb }).catch(() => false);
 );
-const two_of_four = await Promise.all(promises) // returns [true, true, false, false] and logs "abort 2"
+const two_of_four = await Promise.all(promises)
+// returns [true, true, false, false] and logs "abort 2"
 
 ```
 
 However, because Fetch Manager is queing requests for unknown lengths of time,
 attaching a native [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) at the initial `fm.fetch` call may lead to unexpected timing results, 
 depending on the result you want to achieve.
+
 For this purpose, you can set an `abort_timeout` option (in ms) at three levels of priority:
 - Per request, in the `fm.fetch` properties object (priority 1)
 - Default for a target in it's class initialiser options (priority 2)
@@ -259,8 +272,10 @@ For example, to set it for a request:
 const controller = new AbortController();
 const { signal } = controller;
 const req = new Request("https://foo.com", { signal });
-const resp = await fm.fetch(req, { abort_timeout: 1000 }) // Will abort if the request takes longer than 1000ms
-    .catch((err) => console.error(err.name))              // "TimeoutError" or "AbortError" 
+// Will abort if the request takes longer than 1000ms
+const resp = await fm.fetch(req, { abort_timeout: 1000 }).catch((err) => {
+    console.error(err.name) // "TimeoutError" or "AbortError"
+})               
 
 // ...Do stuff that consumes time...
 
@@ -269,7 +284,7 @@ controller.abort();
 
 The user's abort signal will remain available, ie. the timeout signal is added - it does not replace user defined signals.
 
-If no `abort_timeout` is given, the default system timeout will be used, which can vary.
+If no `abort_timeout` is given, the default system timeout will be used - which can vary.
 
 
 ## Options and overloads
@@ -277,22 +292,22 @@ If no `abort_timeout` is given, the default system timeout will be used, which c
 
 ### Class initialiser
 ```ts
-const fm = new FetchManager({
-    req_max_per_period: number,             // The rate limit
-    req_max_concurrent: number,             // Maximum concurrency
-    rpp_period_def: fm.period,              // The period of the rate limit, "sec" | "min" | "hr" | "day"
-    targets: [/*... See below ...*/],
+const fm = new FetchManager(...[
+    max_rpp: number,                            // The rate limit
+    max_concurrency: number,                    // Maximum concurrency
+    pariod: fm.period,                          // The period of the rate limit, "sec" | "min" | "hr" | "day"
+    targets: [...],                             // See section below
     options?: {
-        wait_ms?: number,                   // Override the default (500) retry wait in ms
-        heartbeat?: number,                 // Override the default (20) queue heartbeat in ms
+        wait_ms?: number,                       // Override the default (500) retry wait in ms
+        heartbeat?: number,                     // Override the default (20) queue heartbeat in ms
         /* Options defined hereunder are 
          * fallen back on as priority (3) */
-        abort_timeout?: number,             // Number of ms after request is sent until abort
+        abort_timeout?: number,                 // Number of ms after request is sent until abort
         retry_cb?: fm.cb.retry,             
         wait_cb?: fm.cb.wait,
         trace_cb?: fm.cb.trace,
     },
-})
+])
 
 ```
 If a bucket for the instance is available, that may be used to initialise an instance, thus preserving or migrating the state of limits:
@@ -303,11 +318,11 @@ save_to_file(..., bucket)
 // Server restarts
 
 const bucket: fm.bucket = get_from_file(...)
-const fm = new FetchManager({
+const fm = new FetchManager(...[
     bucket,
     targets: [...],
     options?: {...}
-})
+])
 
 ```
 The bucket must match the targets, ie. the uid hash of the bucket must align with the targets definition else an error will be thrown.
@@ -342,7 +357,7 @@ In the shape below, fallback options are specified for `bar.domain.com`
         target_key: "bar.domain.com",
         /* Options defined hereunder are
          * fallen back on as priority (2) */
-        abort_timeout?: number,              // Number of ms after request is sent until abort
+        abort_timeout?: number,
         response_cb?: fm.cb.resp,       
         retry_cb?: fm.cb.retry,
         wait_cb?: fm.cb.wait,
@@ -432,7 +447,9 @@ const important = fm.fetch("http://foo.com/api/important", {skip_queue: true})
 This option is by nature quirky and opinionated. The examples below will illustrate.
 ```ts
 const buggy_endpoint = fm.fetch("http://foo.com/api/buggy", {force_retry: 5})
-const important_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.com/api/stuff")))
+const important_stuff = Promise.all([...Array(10)].map(
+    () => fm.fetch("https://foo.com/api/stuff"))
+)
 
 ```
 
@@ -447,7 +464,9 @@ and the 500ms wait for `buggy_endpoint` will have expired.
 We can also do the inverse, and prioritise request retries to the front of the queue.
 ```ts
 const buggy_important = fm.fetch("http://foo.com/api/buggy", { force_retry: -5 })
-const normal_stuff = Promise.all([...Array(10)].map(() => fm.fetch("https://foo.com/api/stuff")))
+const normal_stuff = Promise.all([...Array(10)].map(
+    () => fm.fetch("https://foo.com/api/stuff"))
+)
 
 ```
 
@@ -495,7 +514,10 @@ your_orchestration.on("update", (all_targets, buckets) => {
         const targets = fm_targets[uid] || all_targets[uid]!;
         const options = fm_options[uid] || {};
         // No instance yet, so create it
-        if(!fm_instances[uid]) return (fm_instances[uid] = new FetchManager(bucket, targets, options));
+        if (!fm_instances[uid]) {
+            fm_instances[uid] = new FetchManager(bucket, targets, options);
+            return
+        }
     
         const ex_bucket = FetchManager.bucket.get(uid)!;
         bucket.tokens = Math.min(bucket.tokens, ex_bucket.tokens);
