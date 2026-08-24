@@ -598,16 +598,15 @@ bun run_tests
 [top](#toc)
 
 Try a rather nifty WikiData explorer!
-```bash
-# If you have installed Fetch Manager as a module:
-node ./node_modules/fetch-manager/demo/wikidata.js
-bun ./node_modules/fetch-manager/demo/wikidata.js
+- [NPM wikidata-explore](https://www.npmjs.com/package/wikidata-explore)
+- [Github](https://github.com/citkane/wikidata-explore)
 
-# If you have cloned the repository:
-node ./demo/wikidata.js
-bun ./demo/wikidata.js
+```bash
+npx wikidata-explore
+bunx wikidata-explore
 
 ```
+It is a Terminal User Interface that queries the public, rate limited [Wikibase API](https://www.mediawiki.org/wiki/Wikibase/API)
 
 ## What about Deno?
 I don't use Deno, so I am not familiar with it's ecosystem and haven't tried Fetch Manager on it. It will probably work.

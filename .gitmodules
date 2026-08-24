@@ -1,0 +1,3 @@
+[submodule "demo/wikidata-explore"]
+	path = demo/wikidata-explore
+	url = https://github.com/citkane/wikidata-explore.git

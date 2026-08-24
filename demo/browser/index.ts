@@ -17,8 +17,8 @@
 
 import FetchManager from "fetch-manager";
 import LibFetch from "fetch-manager/lib";
-import { WikiApi } from "../wikidata/lib/WikiApi.ts";
-import type { w } from "../wikidata/lib/wiki_types";
+import { WikiApi } from "../wikidata-explore/src/lib/WikiApi.ts";
+import type { w } from "../wikidata-explore/src/lib/wiki_types";
 
 const lib_fetch = new LibFetch();
 const language = "en";
