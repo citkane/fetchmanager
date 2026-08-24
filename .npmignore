@@ -3,8 +3,7 @@ node_modules
 .git
 test
 bunfig.toml
-demo/browser
-demo/wikidata
+demo
 
 # output
 out
