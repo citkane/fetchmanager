@@ -482,6 +482,7 @@ namespace fm {
       reject: reject;
       paused?: () => void;
       abort_timeout?: number;
+      aborted: () => boolean;
     };
 
     type fetch_fn<K extends fm.kind> = {
@@ -531,7 +532,7 @@ namespace fm {
     type limiter_bucket = {
       is_full: () => boolean;
       remove_token: () => void;
-      replace_token: (err: Error) => void;
+      replace_token: () => void;
       dec_concurrent: () => void;
       inc_concurrent: () => void;
       interval: any;

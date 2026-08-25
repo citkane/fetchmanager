@@ -1,10 +1,11 @@
 {
   "name": "fetch-manager",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "module": "./src/FetchManager.ts",
-  "description": "Wraps native JS fetch to manage rate limits, concurrency, paging, retry, response data",
+  "description": "A dependency-free TypeScript request manager for applications that need to use native fetch while controlling concurrency, request rates, retries, and pagination.",
   "keywords": [
     "fetch",
+    "native",
     "rate",
     "limit",
     "limiter",

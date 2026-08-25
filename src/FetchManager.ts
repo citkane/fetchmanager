@@ -129,6 +129,12 @@ export default class FetchManager<G extends fm.kind> {
   private native_fetch = (ctx: fm.p.ctx<G>) => {
     const { ctx_req, abort_timeout } = ctx;
     let { url, req_init, req } = ctx_req;
+    if (ctx.aborted()) {
+      // fail fast if the request was aborted
+      const params = req ? ([req] as const) : ([url!, req_init] as const);
+      return fetch(params[0], params[1]);
+    }
+
     // Capture potential user signal from the given request
     const user_signal = req?.signal || req_init?.signal;
     // Create a timeout signal if set by user option
@@ -157,8 +163,10 @@ export default class FetchManager<G extends fm.kind> {
     const target_keys = target_groups.get(uid) || [];
     clearInterval(limiter.heartbeat);
     limiter?.bucket.kill();
-    limiter?.reqs.queue.forEach((req) => {
-      const { reject } = req.get_ctx();
+    limiter?.reqs.queue.forEach((fetch_fn) => {
+      const { reject, aborted } = fetch_fn.get_ctx();
+      if (aborted()) return;
+
       reject(Error("Target group was killed"));
     });
     if (target_keys.length)
@@ -218,16 +226,21 @@ export default class FetchManager<G extends fm.kind> {
     const { limiter, handle } = this;
     const ctx = limiter.reqs.queue[0]?.get_ctx();
     const is_paused = limiter.paused.refr_pause(ctx);
+    // do not trace if the queue is empty, paused or aborted
+    const should_trace = ctx && !is_paused && !ctx.aborted();
     // Should the next request be sent?
     if (limiter.reqs.is_stopped() || limiter.bucket.is_stopped() || is_paused)
-      // do not trace if the queue is empty or paused
-      return ctx && !is_paused ? handle.trace(ctx) : undefined;
+      return should_trace ? handle.trace(ctx) : undefined;
 
     // Yes, good to go!
-    limiter.bucket.remove_token();
-    limiter.bucket.inc_concurrent();
-    limiter.bucket.stamp_time();
-    handle.trace(ctx!);
+    // if the request was aborted before sent, so we don't process limits
+    if (!ctx!.aborted()) {
+      limiter.bucket.remove_token();
+      limiter.bucket.inc_concurrent();
+      limiter.bucket.stamp_time();
+      handle.trace(ctx!);
+    }
+    // We execute fetch, even if aborted, to trigger the error
     const { execute_fetch } = limiter.reqs.queue.shift()!;
     execute_fetch();
   };
@@ -244,15 +257,17 @@ export default class FetchManager<G extends fm.kind> {
     // Trigger native fetch and handle the response.
     async function execute_fetch() {
       let resp: Response;
+      const was_aborted = ctx.aborted();
       try {
         resp = await native_fetch(ctx);
       } catch (_error) {
         const error = err.ensure_error(_error);
+        if (was_aborted) return handle.error(ctx, error);
+
         limiter.bucket.dec_concurrent();
         limiter.bucket.stamp_time();
-        // No response - so no rate penalty except if user aborted
-        // TODO - examine this logic more closely
-        limiter.bucket.replace_token(error);
+        // No response - so no rate penalty
+        limiter.bucket.replace_token();
         return handle.error(ctx, error);
       }
 
@@ -461,11 +476,7 @@ export default class FetchManager<G extends fm.kind> {
         bucket.tokens--;
       }
 
-      function replace_token(err: Error) {
-        // Error was probably user invoked, and request more than likely reached the server.
-        // Do not replace the token in this case.
-        // @TODO - this logic needs more thought
-        if (err.name === "TimeoutError" || err.name === "AbortError") return;
+      function replace_token() {
         // replace the spent token. Maybe network was down, etc...
         add();
       }
@@ -667,6 +678,7 @@ export default class FetchManager<G extends fm.kind> {
         ...handlers,
         skip_queue,
         abort_timeout,
+        aborted,
       };
 
       // Merges the user handlers into the request context in order of priority:
@@ -690,6 +702,10 @@ export default class FetchManager<G extends fm.kind> {
           });
           return handlers;
         }, handlers);
+      }
+
+      function aborted() {
+        return (req || req_init)?.signal?.aborted || false;
       }
     },
 
@@ -866,10 +882,15 @@ export default class FetchManager<G extends fm.kind> {
     // Handle the user's trace_cb
     trace: (ctx: fm.p.ctx<G>, mssg?: string) => {
       const { targets } = this;
+      const { err } = FetchManager;
       if (!ctx.trace_cb) return;
 
       const data = targets.make_trace_data(ctx, mssg);
-      ctx.trace_cb(data);
+      try {
+        ctx.trace_cb(data);
+      } catch (error) {
+        ctx.reject(err.ensure_error(error));
+      }
     },
 
     // Handle the user's pager_cb

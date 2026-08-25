@@ -1,12 +1,21 @@
 # Fetch Manager
-A zero dependency TS wrapper around native Javascript `fetch` providing management of:
-- rate limiting
-- concurrency
-- paging
-- retry strategy
-- response data
 
-For Node, Bun and the browser (and probably Deno too).
+A dependency-free TypeScript request manager for applications that need to use native fetch while controlling concurrency, request rates, retries, and pagination.
+It deliberately does not impose API-specific behavior. Retry decisions, wait durations, response handling, and pagination are supplied through callbacks - 
+because different APIs interpret rate-limit headers, cursors, and transient failures differently.
+
+Requests, retries, and paginated follow-up requests remain part of one managed lifecycle and resolve or reject through the original caller-visible promise.
+
+Use it when you need:
+- bounded concurrent requests;
+- requests-per-period limits;
+- custom retry and backoff behavior;
+- cursor, offset, page-number, or header-based pagination;
+- response transformation;
+- native fetch semantics;
+- zero runtime dependencies.
+
+For Node, Bun and the browser (and [probably Deno](#what-about-deno) too).
 ### toc
 - [Basic Usage](#basic-usage)
 - [Core concepts](#core-concepts)
@@ -26,9 +35,8 @@ For Node, Bun and the browser (and probably Deno too).
 
 ## Basic usage
 [top](#toc)
-### Initiate a Fetch Manager instance
-This will act upon a unique set of targets.
-
+### Instantiate a Fetch Manager instance
+A Fetch Manager instance sets limits for a group of one or more targets.
 ```ts
 import FetchManager from "fetch-manager";
 
@@ -36,10 +44,10 @@ const time_period = "min";
 const rpp_max = 200;        // Maximum Requests Per Period (rpp) ie. the rate limit
 const concurrency_max = 3;  // Maximum active requests at any given time
 const fm = new FetchManager(rpp_max, concurrency_max, time_period, [
+  // Targets can be defined as "host" or more granularly as "host + pathname"
   "foo.domain.com",
   "bar.domain.com",
-    // Targets can be also "URL.host" or "URL.host + URL.pathname"
-  "baz.domain.com/api",
+  "baz.domain.com/api/foobar",
 ]);
 ```
 
@@ -49,10 +57,10 @@ Use it akin to native `fetch`
 
 ```ts
 const foo_res = await fm.fetch("https://foo.domain.com/api").catch((err) => {
-    // `err` is one of: 
-    // if no `Response` then `Error`
+    // `err` is assured to be one of: 
+    //      a) if no `Response` then `Error`
     if (err instanceof Error) throw err;    
-    // if no `Response.ok` then `Response`
+    //      b) if no `Response.ok` then `Response`
     console.error(err.status);              
 });
 ```
@@ -66,12 +74,12 @@ const response_cb: fm.cb.resp = async (resp, _req) => {
 };
 
 const req = new Request("https://bar.domain.com/api")
-// `bar` will be typed
+// `bar` will be typed as the returned data
 const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }); 
 ```
 
 ### example (3)
- * a) Wait and retry 503 / 429 status's based on response headers.
+ * a) Retry 503 / 429 status's after a pause based on the response headers.
  * b) Accept non-standard framework / module `RequestInit` shapes 
 
 ```ts
@@ -87,22 +95,22 @@ const handlers: {
     },
     // How long to pause the queue before retrying?
     wait_cb: (resp, _req) => {
-      /* We have already filtered out Errors in retry_cb,
-       * but the TS pre-processor doesn't know that. */
+      // We have already filtered out Errors in retry_cb, but the TS pre-processor doesn't know that.
       if (resp instanceof Error) return 0; 
-      const wait_ms = resp.headers.get("Retry-After") || "500";
-      return Number(wait_ms);
+
+      const wait_s = resp.headers.get("Retry-After") || "5";
+      return Number(wait_s) * 1000;
     },
 };
 
+// Unless there is a failure outside of 503 or 429, baz is guaranteed a Response.ok
 const baz = await fm.fetch(
-    "https://baz.domain.com/api/endpoint",
-    // If the global `RequestInit` type definition is not compliant, then force TS typing.
-    // Ensure that your global `fetch` is capable of accepting the non-standard shape. 
+    "https://baz.domain.com/api/foobar",
+    // We can force a non-native `RequestInit` form.
+    // Ensure that your `global.fetch` is capable of accepting the non-standard shape. 
     { tls: { rejectUnauthorized: false } } as RequestInit, 
     handlers,
 );
-// Unless there is some failure outside of 503 or 429, baz is guaranteed a Response.ok
 
 ```
 
@@ -158,8 +166,7 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 ... Continued from previous example
 
 ```ts
-/* We inform the callback of the request shape, `<"req" | "url">`
- * so that the `req` parameter type is disambiguated. */ 
+// Inform the callback of the request shape, `<"req" | "url">` to disambiguate the `req` parameter 
 const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
     const { next, data } = (await resp.json()) as bar_type;
     collect(data);                                  // optional - overrides `response_cb` and flattens the resolved result
@@ -173,14 +180,14 @@ const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
 };
 
 const req = new Request("https://bar.domain.com/api/paged")
-const all_data = await fm.fetch<bar_type["data"][]>(req, pager_cb);
-// You now have all your paged data in a single batch.
+// The paged data resolves in a single batch.
+const all_data = await fm.fetch<bar_t["data"]>(req, pager_cb);
 
 ```
 
 `pager_cb` will cause `fm.fetch` to always return an `Array` (if no fatal error).
 
-In the above example, we used the `collect` utility function. It is slightly opinionated. If `data` is `any[]`,
+In the above example, we used the `collect` utility function. It is slightly opinionated. If `bar_t["data]` is `any[]`,
 then it will flatten the paged results so that `all_data` is also `any[]`.
 This behaviour can be overidden with `collect(data, false)` in which case `all_data` will be `any[][]`
 
@@ -232,8 +239,7 @@ type trace_data = {
 ## Aborting and timeouts
 [top](#toc)
 
-Native Javascript `fetch` uses [signals](https://developer.mozilla.org/en-US/docs/Web/API/Request/signal) to manage user controlled aborts.
-This is compatible with Fetch Manager, eg.
+Native Javascript `fetch` uses [signals](https://developer.mozilla.org/en-US/docs/Web/API/Request/signal) to manage user controlled aborts. This is compatible with Fetch Manager, eg.
 ```ts
 let count = 0;
 const controller = new AbortController();
@@ -242,15 +248,16 @@ signal.addEventListener("abort", () => console.log("abort", count));
 
 const response_cb: fm.cb.resp = (resp, _req) => {
     count ++;
-    if(count > 1) controller.abort()
+    if(count > 1) controller.abort();
     return resp.ok;
 }
 
-const promises = [...Array(4)].map(
-    () => fm.fetch("https://foo.com", { signal }, { response_cb }).catch(() => false);
-);
+const promises = [...Array(4)].map(() => { 
+    const req = new Request("https://foo.com", { signal });
+    return fm.fetch(req, { response_cb }).catch(() => false);
+});
+// resolves [true, true, false, false] and logs "abort 2"
 const two_of_four = await Promise.all(promises)
-// returns [true, true, false, false] and logs "abort 2"
 
 ```
 
@@ -280,6 +287,7 @@ const resp = await fm.fetch(req, { abort_timeout: 1000 }).catch((err) => {
 // ...Do stuff that consumes time...
 
 controller.abort();
+
 ```
 
 The user's abort signal will remain available, ie. the timeout signal is added - it does not replace user defined signals.
@@ -585,10 +593,10 @@ To cancel in-flight requests, the user should set up an `AbortSignal` and call i
 [top](#toc)
 ```bash
 bun add fetch-manager # NPM
-bun add citkane/fetchmanager#v0.1.0 #Github
+bun add citkane/fetchmanager#v0.1.0 #Github - check for latest release version
 
 npm i fetch-manager # NPM
-npm i citkane/fetchmanager#v0.1.0 #Github
+npm i citkane/fetchmanager#v0.1.0 #Github - check for latest release version
 
 ```
 
