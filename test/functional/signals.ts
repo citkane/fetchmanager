@@ -34,7 +34,6 @@ describe("signals", () => {
   });
 
   test("it aborts", async () => {
-    let aborted = false;
     const fm = new FetchManager(20, 5, "sec", ["localhost:3000"]);
     let controller = new AbortController();
     let signal = controller.signal;
@@ -45,6 +44,7 @@ describe("signals", () => {
     expect(resp).toBe("AbortError");
 
     let count = 0;
+    let aborted = false;
     controller = new AbortController();
     signal = controller.signal;
     signal.addEventListener("abort", () => (aborted = true));
