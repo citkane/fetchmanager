@@ -1,8 +1,6 @@
 # Fetch Manager
 
 A dependency-free TypeScript request manager for applications that need to use native fetch while controlling concurrency, request rates, retries, and pagination.
-It deliberately does not impose API-specific behavior. Retry decisions, wait durations, response handling, and pagination are supplied through callbacks - 
-because different APIs interpret rate-limit headers, cursors, and transient failures differently.
 
 Requests, retries, and paginated follow-up requests remain part of one managed lifecycle and resolve or reject through the original caller-visible promise.
 
@@ -132,18 +130,20 @@ See later documentation on:
 Caching and orchestration frameworks are outside the scope of this library, and left to the user to implement their own.
 
 If and when rate / concurrency limits are reached for an instance, it's queue is paused until the limits are once again within allowances.
-Logic such as paging and adaptive retry strategies are managed by user provided callback handlers:
+
+It deliberately does not impose API-specific behavior. Retry decisions, wait durations, response handling, and pagination are supplied through callbacks - 
+because different APIs interpret rate-limit headers, cursors, and transient failures differently.
 - `retry_cb`: answers "*should I retry this failed request?*" with a boolean response,
 - `wait_cb`: answers "*for how long to pause the queue?*" with a number in ms,
 - `pager_cb`: answers "*is there more data?*" with nullish for false or a new request for true,
 - `response_cb`: manipulates the response payload into a desired data shape before resolving it.
 - `trace_cb`: provides diagnostic data about the state of the queue.
 
-Handlers (excepting trace) are injected with the `Response` as well as the request in it's given shape: (see the `fm.req` type).
+Callbacks (excepting trace) are injected with the `Response` as well as the request in it's given shape: (see the `fm.req` type).
 The injected response for `retry_cb` and `wait_cb` can be `Response | Error` - `pager_cb` and `response_cb` are guaranteed a `Response`.
 The pager_cb is injected also with an (optional) `collect` function to facilitate flattening the final data return. 
 
-Handlers can be set at 3 cascading levels of priority (excepting pager):
+Callbacks can be set at 3 cascading levels of priority (excepting pager):
 1) per individual request
 2) at class instantiation per individual target
 3) at class instantiation for the whole target group.
@@ -271,7 +271,7 @@ For this purpose, you can set an `abort_timeout` option (in ms) at three levels 
 - Default for all targets in the class initialiser options (priority 3)
 
 Fetch Manager will add the timeout signal just in time before the request is sent.
-For paged queries, don't forget to unset the timeout signal in your `pager_cb`, else the first page's timer will cascade into subsequent requests.
+For paged queries, don't forget to unset a timeout signal in your `pager_cb`, else the first page's timer could cascade into subsequent requests.
 
 For example, to set it for a request:
 ```ts
@@ -293,6 +293,8 @@ controller.abort();
 The user's abort signal will remain available, ie. the timeout signal is added - it does not replace user defined signals.
 
 If no `abort_timeout` is given, the default system timeout will be used - which can vary.
+
+If a user AbortSignal is called, all further callbacks are ignored and the abort error is immediately rejected. A timeout signal will however proceed to evaluate any subsequent callbacks in the lifecycle.
 
 
 ## Options and overloads

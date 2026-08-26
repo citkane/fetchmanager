@@ -127,22 +127,25 @@ export default class FetchManager<G extends fm.kind> {
 
   /** The native fetch implementation */
   private native_fetch = (ctx: fm.p.ctx<G>) => {
-    const { ctx_req, abort_timeout } = ctx;
+    const { ctx_req, abort_timeout, aborted } = ctx;
     let { url, req_init, req } = ctx_req;
-    if (ctx.aborted()) {
+    if (aborted()) {
       // fail fast if the request was aborted
-      const params = req ? ([req] as const) : ([url!, req_init] as const);
+      // we still send the request to fetch - this resolves error handling and callbacks
+      const params = req
+        ? ([req.clone()] as const)
+        : ([url!, req_init] as const);
       return fetch(params[0], params[1]);
     }
 
     // Capture potential user signal from the given request
     const user_signal = req?.signal || req_init?.signal;
     // Create a timeout signal if set by user option
-    const timeout = abort_timeout
+    const to_signal = abort_timeout
       ? AbortSignal.timeout(abort_timeout)
       : undefined;
     // Transfer signals into the request
-    const signals: AbortSignal[] = [user_signal, timeout].filter((s) => !!s);
+    const signals: AbortSignal[] = [user_signal, to_signal].filter((s) => !!s);
     const init = signals.length ? { signal: AbortSignal.any(signals) } : {};
     const params = req
       ? // create a new Request - the original's body may be accessed in the callback chain.
@@ -159,23 +162,26 @@ export default class FetchManager<G extends fm.kind> {
    * */
   public kill = async () => {
     const { limiters, target_groups, all_target_keys } = FetchManager;
-    const { limiter, uid } = this;
+    const { limiter, uid, handle } = this;
     const target_keys = target_groups.get(uid) || [];
+    const mssg = "Target group was killed";
+    let ctx: fm.p.ctx<G> | undefined = undefined;
+
     clearInterval(limiter.heartbeat);
     limiter?.bucket.kill();
-    limiter?.reqs.queue.forEach((fetch_fn) => {
-      const { reject, aborted } = fetch_fn.get_ctx();
-      if (aborted()) return;
-
-      reject(Error("Target group was killed"));
-    });
-    if (target_keys.length)
-      FetchManager.all_target_keys = all_target_keys.filter(
-        (key) => !target_keys.includes(key),
-      );
-    limiters.delete(uid);
     target_groups.delete(uid);
-    return;
+
+    while ((limiter?.reqs.queue || []).length) {
+      const fetch_fn = limiter.reqs.queue.shift()!;
+      ctx = fetch_fn.get_ctx();
+      ctx.reject(Error(mssg));
+    }
+    if (ctx) handle.trace(ctx, mssg);
+    limiters.delete(uid);
+
+    FetchManager.all_target_keys = all_target_keys.filter(
+      (key) => !target_keys.includes(key),
+    );
   };
 
   /**
@@ -184,13 +190,18 @@ export default class FetchManager<G extends fm.kind> {
    * The queue will stop polling after all requests have been sent, but not necesarily resolved.
    * */
   public stop = async () => {
-    const { limiter, kill } = this;
+    const { limiter, kill, handle } = this;
     return new Promise<void>((res) => poll(res));
 
-    function poll(res: () => void) {
-      return limiter.reqs.queue.length
-        ? setTimeout(() => poll(res), limiter.heartbeat_ms)
-        : kill().then(() => res());
+    function poll(res: () => void, ctx?: fm.p.ctx<G>) {
+      if (limiter.reqs.queue.length) {
+        const last = limiter.reqs.queue.length === 1;
+        ctx = last ? limiter.reqs.queue[0]!.get_ctx() : undefined;
+        return setTimeout(() => poll(res, ctx), limiter.heartbeat_ms);
+      }
+
+      if (ctx) handle.trace(ctx, "Target group was stopped");
+      return kill().then(() => res());
     }
   };
 
@@ -198,9 +209,10 @@ export default class FetchManager<G extends fm.kind> {
   private queue_req = async <T = any>(
     part_ctx: Partial<fm.p.ctx<G>>,
   ): Promise<T> => {
-    const { fetch_factory, limiter } = this;
-    const { skip_queue, resolve } = part_ctx;
-    const retry_ctx = !!resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
+    const { fetch_factory, limiter, handle } = this;
+    const { skip_queue, resolve, ctx_req } = part_ctx;
+
+    const retry_ctx = resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
     if (retry_ctx) {
       const req_fn = fetch_factory(retry_ctx);
       skip_queue
@@ -214,10 +226,23 @@ export default class FetchManager<G extends fm.kind> {
     return new Promise((resolve, reject) => {
       const full_ctx = { ...part_ctx, resolve, reject } as fm.p.ctx<G>;
       const req_fn = fetch_factory(full_ctx);
+      abort_listener(req_fn);
       skip_queue
         ? limiter.reqs.queue.unshift(req_fn)
         : limiter.reqs.queue.push(req_fn);
     });
+
+    // Listen for user triggered abort events.
+    // Clear the queue of any aborted requests and process them immediately
+    function abort_listener(fetch_fn: fm.p.fetch_fn<G>) {
+      const req = ctx_req?.req || ctx_req?.req_init;
+      const signal = req?.signal || undefined;
+      if (!signal) return;
+
+      signal.addEventListener("abort", () => handle.abort(fetch_fn), {
+        once: true,
+      });
+    }
   };
 
   /** Process the next request in the queue
@@ -233,16 +258,17 @@ export default class FetchManager<G extends fm.kind> {
       return should_trace ? handle.trace(ctx) : undefined;
 
     // Yes, good to go!
-    // if the request was aborted before sent, so we don't process limits
     if (!ctx!.aborted()) {
+      // if the request was aborted before sent we don't process limits
       limiter.bucket.remove_token();
       limiter.bucket.inc_concurrent();
       limiter.bucket.stamp_time();
       handle.trace(ctx!);
     }
-    // We execute fetch, even if aborted, to trigger the error
-    const { execute_fetch } = limiter.reqs.queue.shift()!;
-    execute_fetch();
+    // We execute fetch, even if aborted, to resolve / reject the user side promise
+    const req = limiter.reqs.queue.shift()!;
+    req.in_flight = true;
+    req.execute_fetch();
   };
 
   /** Functionality related to fetch handling **/
@@ -252,6 +278,7 @@ export default class FetchManager<G extends fm.kind> {
     return {
       execute_fetch,
       get_ctx: () => ctx,
+      in_flight: false,
     };
 
     // Trigger native fetch and handle the response.
@@ -679,6 +706,7 @@ export default class FetchManager<G extends fm.kind> {
         skip_queue,
         abort_timeout,
         aborted,
+        user_aborted: false,
       };
 
       // Merges the user handlers into the request context in order of priority:
@@ -799,12 +827,41 @@ export default class FetchManager<G extends fm.kind> {
       const mssg =
         resp instanceof Response
           ? `${resp.status} ${resp.statusText} for ${href}.`
-          : `Fetch errored before response for ${href}.`;
+          : ctx.user_aborted
+            ? `User aborted before fetch: ${href}`
+            : `Fetch errored before response: ${href}`;
       handle.trace(ctx, mssg);
       // Retry the request if needed
-      if (handle.should_retry(ctx, resp)) return handle.retry(ctx, resp);
+      // If the user aborted then callbacks are skipped
+      if (!ctx.user_aborted && handle.should_retry(ctx, resp))
+        return handle.retry(ctx, resp);
 
       ctx.reject(resp);
+    },
+
+    // handle a user issued abort signal
+    abort: (fetch_fn: fm.p.fetch_fn<G>) => {
+      const { limiter } = this;
+      // this particular request is already in a post-fetch lifecycle.
+      // returning here prevents recursive calls to filter
+      if (fetch_fn.in_flight) return;
+
+      // the trigger may be attached to multiple requests
+      // we thus prune all queued aborted requests
+      const aborted: fm.p.fetch_fn<G>[] = [];
+      limiter.reqs.queue = limiter.reqs.queue.filter((fetch_fn) => {
+        if (!fetch_fn.get_ctx().aborted()) return true;
+        aborted.push(fetch_fn);
+        return false;
+      });
+
+      aborted.forEach((req) => {
+        req.in_flight = true;
+        const ctx = req.get_ctx();
+        ctx.user_aborted = true;
+        // fail fast
+        req.execute_fetch();
+      });
     },
 
     // Check if a failed request should be retried
