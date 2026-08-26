@@ -483,11 +483,13 @@ namespace fm {
       paused?: () => void;
       abort_timeout?: number;
       aborted: () => boolean;
+      user_aborted: boolean;
     };
 
     type fetch_fn<K extends fm.kind> = {
       execute_fetch: Function;
       get_ctx: () => ctx<K>;
+      in_flight: boolean;
     };
 
     type ctx_pms<K extends fm.kind> = {

@@ -1,6 +1,6 @@
 {
   "name": "fetch-manager",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "module": "./src/FetchManager.ts",
   "description": "A dependency-free TypeScript request manager for applications that need to use native fetch while controlling concurrency, request rates, retries, and pagination.",
   "keywords": [

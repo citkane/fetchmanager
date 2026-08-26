@@ -33,8 +33,10 @@ describe("signals", () => {
     await fm.kill();
   });
 
-  test("it aborts", async () => {
-    const fm = new FetchManager(20, 5, "sec", ["localhost:3000"]);
+  test("it aborts inflight requests", async () => {
+    let trace = {} as fm.trace_data;
+    const trace_cb: fm.cb.trace = (data) => (trace = data);
+    const fm = new FetchManager(20, 5, "sec", ["localhost:3000"], { trace_cb });
     let controller = new AbortController();
     let signal = controller.signal;
     setTimeout(() => controller.abort(), 300);
@@ -42,22 +44,33 @@ describe("signals", () => {
       .fetch(urls.slow(1000), { signal }, { abort_timeout: 500 })
       .catch((err) => err.name);
     expect(resp).toBe("AbortError");
+    // expect(trace.message).toBe("assada");
+    expect(trace.queue).toBe(0);
+    await fm.kill();
+  });
 
+  test("it aborts queued requests", async () => {
     let count = 0;
     let aborted = false;
-    controller = new AbortController();
-    signal = controller.signal;
+    let trace = {} as fm.trace_data;
+    const trace_cb: fm.cb.trace = (data) => (trace = data);
+    const fm = new FetchManager(20, 1, "sec", ["localhost:3000"], { trace_cb });
+    const controller = new AbortController();
+    const signal = controller.signal;
     signal.addEventListener("abort", () => (aborted = true));
     const response_cb: fm.cb.resp = (resp, _req) => {
       count++;
-      if (count > 4) controller.abort();
+      if (count === 5) controller.abort();
       return resp.ok;
     };
     const promises = [...Array(10)].map(() =>
       fm.fetch(urls.slow(50), { signal }, { response_cb }).catch(() => false),
     );
     const five_of_ten = await Promise.all(promises);
+
     expect(aborted).toBe(true);
+    expect(trace.queue).toBe(0);
+    expect(trace.message).toContain("User aborted before fetch");
     expect(five_of_ten).toEqual([
       true,
       true,

@@ -43,34 +43,49 @@ describe("basic functionality", () => {
   });
 
   test("it kills waiting requests", async () => {
-    const fm = new FetchManager(1, 1, "sec", ["localhost:3000"]);
-    fm.fetch(urls.status).catch(() => {
+    let trace = {} as fm.trace_data;
+    const trace_cb: fm.cb.trace = (data) => {
+      trace = data;
+    };
+    const fm = new FetchManager(1, 1, "sec", ["localhost:3000"], { trace_cb });
+    const r1 = fm.fetch(urls.status).catch(() => {
       throw "should succeed";
     });
-    fm.fetch(urls.status)
+    const r2 = fm
+      .fetch(urls.status)
       .then(() => {
         throw "shouldn't have resolved";
       })
-      .catch((err) => {
-        expect(err.message).toBe("Target group was killed");
-      });
+      .catch((err) => err.message);
     await new Promise<void>((res) =>
       setTimeout(() => fm.kill().then(() => res()), 30),
     );
+    expect(r1).resolves.toBeInstanceOf(Response);
+    expect(r2).resolves.toBe("Target group was killed");
+    expect(trace.queue).toBe(0);
+    expect(trace.message).toBe("Target group was killed");
   });
 
   test("it cleanly stops the queue", async () => {
-    const fm = new FetchManager(300, 3, "sec", ["localhost:3000"]);
+    let trace = {} as fm.trace_data;
+    const trace_cb: fm.cb.trace = (data) => {
+      trace = data;
+    };
+    const fm = new FetchManager(300, 3, "sec", ["localhost:3000"], {
+      trace_cb,
+    });
     const promises = [...Array(5)].map(() =>
       fm.fetch(urls.status).then((res) => res.ok),
     );
     const ok = Promise.all(promises);
     await fm.stop();
     expect(ok).resolves.toEqual([...Array(5)].map(() => true));
+    expect(trace.queue).toBe(0);
+    expect(trace.message).toBe("Target group was stopped");
     expect(fm.fetch(urls.status)).rejects.toThrow("Target group was killed");
   });
 
-  test("it replaces unused tokens", async () => {
+  test("it replaces unspent tokens", async () => {
     await server.stop();
     const fm = new FetchManager(3, 3, "sec", ["localhost:3000"]);
     try {
@@ -89,6 +104,8 @@ describe("basic functionality", () => {
 
   test("it gets all buckets", async () => {
     const fm = new FetchManager(10, 3, "sec", ["localhost:3000"]);
+    const fm2 = new FetchManager(10, 3, "sec", ["foo.com"]);
+    expect(Object.keys(FetchManager.buckets).length).toBe(2);
     expect(FetchManager.buckets[fm.uid]).toEqual({
       uid: "d18909e7",
       max_rpp: 10,
@@ -99,6 +116,7 @@ describe("basic functionality", () => {
       time: 0,
     });
     await fm.kill();
+    await fm2.kill();
   });
 
   test("it gets and sets a bucket", async () => {
