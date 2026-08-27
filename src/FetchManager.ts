@@ -171,8 +171,8 @@ export default class FetchManager<G extends fm.kind> {
     limiter?.bucket.kill();
     target_groups.delete(uid);
 
-    while ((limiter?.reqs.queue || []).length) {
-      const fetch_fn = limiter.reqs.queue.shift()!;
+    while (limiter?.reqs.len()) {
+      const fetch_fn = limiter.reqs.shift()!;
       ctx = fetch_fn.get_ctx();
       ctx.reject(Error(mssg));
     }
@@ -194,9 +194,9 @@ export default class FetchManager<G extends fm.kind> {
     return new Promise<void>((res) => poll(res));
 
     function poll(res: () => void, ctx?: fm.p.ctx<G>) {
-      if (limiter.reqs.queue.length) {
-        const last = limiter.reqs.queue.length === 1;
-        ctx = last ? limiter.reqs.queue[0]!.get_ctx() : undefined;
+      if (limiter.reqs.len()) {
+        const last = limiter.reqs.len() === 1;
+        ctx = last ? limiter.reqs.first()!.get_ctx() : undefined;
         return setTimeout(() => poll(res, ctx), limiter.heartbeat_ms);
       }
 
@@ -215,9 +215,7 @@ export default class FetchManager<G extends fm.kind> {
     const retry_ctx = resolve ? (part_ctx as fm.p.ctx<G>) : undefined;
     if (retry_ctx) {
       const req_fn = fetch_factory(retry_ctx);
-      skip_queue
-        ? limiter.reqs.queue.unshift(req_fn)
-        : limiter.reqs.queue.push(req_fn);
+      skip_queue ? limiter.reqs.unshift(req_fn) : limiter.reqs.push(req_fn);
       return undefined as never;
     }
 
@@ -227,9 +225,7 @@ export default class FetchManager<G extends fm.kind> {
       const full_ctx = { ...part_ctx, resolve, reject } as fm.p.ctx<G>;
       const req_fn = fetch_factory(full_ctx);
       abort_listener(req_fn);
-      skip_queue
-        ? limiter.reqs.queue.unshift(req_fn)
-        : limiter.reqs.queue.push(req_fn);
+      skip_queue ? limiter.reqs.unshift(req_fn) : limiter.reqs.push(req_fn);
     });
 
     // Listen for user triggered abort events.
@@ -249,9 +245,9 @@ export default class FetchManager<G extends fm.kind> {
    * This gets called at every heartbeat **/
   private dequeue = () => {
     const { limiter, handle } = this;
-    const ctx = limiter.reqs.queue[0]?.get_ctx();
+    const ctx = limiter.reqs.first()?.get_ctx() || limiter.reqs.trail_trace();
     const is_paused = limiter.paused.refr_pause(ctx);
-    // do not trace if the queue is empty, paused or aborted
+    // do not trace if the queue is still empty, paused or aborted
     const should_trace = ctx && !is_paused && !ctx.aborted();
     // Should the next request be sent?
     if (limiter.reqs.is_stopped() || limiter.bucket.is_stopped() || is_paused)
@@ -266,7 +262,7 @@ export default class FetchManager<G extends fm.kind> {
       handle.trace(ctx!);
     }
     // We execute fetch, even if aborted, to resolve / reject the user side promise
-    const req = limiter.reqs.queue.shift()!;
+    const req = limiter.reqs.shift()!;
     req.in_flight = true;
     req.execute_fetch();
   };
@@ -361,10 +357,10 @@ export default class FetchManager<G extends fm.kind> {
     function find_target(url: URL) {
       const { all_target_keys, find_uid } = FetchManager;
       const { host, pathname } = url;
-      const target_search = host + pathname;
+      const target_search = host + pathname + "/";
       // all_target_keys is sorted longest first, so the first match will be host + pathname before host
       const target_key = all_target_keys.find((key) =>
-        target_search.startsWith(key),
+        target_search.startsWith(key + "/"),
       );
       if (!target_key)
         return Error("No target found", { cause: { url: url.toString() } });
@@ -408,18 +404,59 @@ export default class FetchManager<G extends fm.kind> {
 
     // access and query the request queue
     function make_reqs(): fm.p.limiter_reqs<G> {
+      let queue: fm.p.fetch_fn<G>[] = [];
+      let last_ctx: fm.p.ctx<G> | undefined = undefined;
       return {
-        queue: [],
         is_stopped,
         why_stopped,
+        first,
+        shift,
+        unshift,
+        push,
+        len,
+        trail_trace,
+        filter_aborted,
       };
 
       function is_stopped() {
-        return !reqs.queue.length;
+        return !queue.length;
       }
       function why_stopped() {
         if (!is_stopped()) return bucket.why_stopped();
         return "queue empty";
+      }
+      function first() {
+        return queue[0];
+      }
+
+      function shift() {
+        if (queue.length === 1) last_ctx = queue[0]!.get_ctx();
+        return queue.shift();
+      }
+      function unshift(fn: fm.p.fetch_fn<G>) {
+        last_ctx = undefined;
+        queue.unshift(fn);
+      }
+      function push(fn: fm.p.fetch_fn<G>) {
+        last_ctx = undefined;
+        queue.push(fn);
+      }
+      function len() {
+        return queue.length;
+      }
+      function trail_trace() {
+        const trace_ctx = last_ctx;
+        last_ctx = undefined;
+        return trace_ctx;
+      }
+      function filter_aborted() {
+        const aborted: fm.p.fetch_fn<G>[] = [];
+        queue = queue.filter((fetch_fn) => {
+          if (!fetch_fn.get_ctx().aborted()) return true;
+          aborted.push(fetch_fn);
+          return false;
+        });
+        return aborted;
       }
     }
 
@@ -789,7 +826,7 @@ export default class FetchManager<G extends fm.kind> {
         max_concurrency,
         max_rpp,
         period,
-        queue: limiter.reqs.queue.length,
+        queue: limiter.reqs.len(),
         force_retry,
         skip_queue,
         target_key,
@@ -848,14 +885,7 @@ export default class FetchManager<G extends fm.kind> {
 
       // the trigger may be attached to multiple requests
       // we thus prune all queued aborted requests
-      const aborted: fm.p.fetch_fn<G>[] = [];
-      limiter.reqs.queue = limiter.reqs.queue.filter((fetch_fn) => {
-        if (!fetch_fn.get_ctx().aborted()) return true;
-        aborted.push(fetch_fn);
-        return false;
-      });
-
-      aborted.forEach((req) => {
+      limiter.reqs.filter_aborted().forEach((req) => {
         req.in_flight = true;
         const ctx = req.get_ctx();
         ctx.user_aborted = true;
@@ -904,7 +934,7 @@ export default class FetchManager<G extends fm.kind> {
       if (
         ctx.force_retry &&
         ctx.force_retry > 0 &&
-        limiter.reqs.queue.length &&
+        limiter.reqs.len() &&
         !ctx.wait_cb
       ) {
         // The request is retrying from the back of a non-empty queue.
