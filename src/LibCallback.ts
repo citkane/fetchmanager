@@ -59,12 +59,12 @@ export default class LibCallback<G = fm.kind> implements fm.lib<G> {
         if (res instanceof Error) {
           if (!max_error) return false;
           errs++;
-          return errs >= max_error;
+          return errs <= max_error;
         }
         if (retry_status.includes(res.status)) {
           if (!max_fail) return true;
           fails++;
-          return fails >= max_fail;
+          return fails <= max_fail;
         }
         return false;
       };
