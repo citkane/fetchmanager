@@ -2,7 +2,7 @@
 
 A dependency-free TypeScript request manager for applications that need to use native fetch while controlling concurrency, request rates, retries, and pagination.
 
-Requests, retries, and paginated follow-up requests remain part of one managed lifecycle and resolve or reject through the original caller-visible promise.
+Requests, retries, and paginated follow-up requests remain part of one managed life-cycle and resolve or reject through the original caller-visible promise.
 
 Use it when you need:
 - bounded concurrent requests;
@@ -34,7 +34,7 @@ For Node, Bun and the browser (and [probably Deno](#what-about-deno) too).
 ## Basic usage
 [top](#toc)
 ### Instantiate a Fetch Manager instance
-A Fetch Manager instance sets limits for a group of one or more targets. Many instances can exist and operate in parralel.
+A Fetch Manager instance sets limits for a group of one or more targets. Many instances can exist and operate in parallel.
 ```ts
 import FetchManager from "fetch-manager";
 
@@ -77,7 +77,7 @@ const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }).catch(...);
 
 ### example (3)
  * a) Retry 503 / 429 status's after a pause based on the response headers.
- * b) Cooerce non-native framework / module `RequestInit` shapes 
+ * b) Coerce non-native framework / module `RequestInit` shapes 
 
 ```ts
 const handlers: {
@@ -119,9 +119,9 @@ Fetch Manager provides class instances acting on a unique set of one or more giv
 - host + [pathname](https://developer.mozilla.org/en-US/docs/Web/API/URL/pathname)
 
 Under the hood it manages a request queue driven by a (configurable) heartbeat for each instance.
-Many instances can be created which will act independantly and in parallel,
+Many instances can be created which will act independently and in parallel,
 but targets cannot overlap on a thread, and should not overlap across a distributed system - 
-ie. a target must not be repeated in multiple instances. If it is, then rate calculations will be inacurate.
+ie. a target must not be repeated in multiple instances. If it is, then rate calculations will be inaccurate.
 See later documentation on:
 - `FetchManager.stop` and `FetchManager.kill` methods for re-defining targets.
 - `FetchManager.bucket.get` and `FetchManager.bucket.set` methods for assisting orchestration.
@@ -147,7 +147,7 @@ Callbacks can be set at 3 cascading levels of priority (excepting pager):
 2) at class instantiation per individual target
 3) at class instantiation for the whole target group.
 
-Behaviour can thus be set globally, and overidden granularly. Paging is set on a per request basis.
+Behaviour can thus be set globally, and overridden granularly. Paging is set on a per request basis.
 Fetch Manager is not very opinionated. It is up to the user to build a re-usable kit of callback handlers to manage their application logic.
 
 Each request has further utility options:
@@ -155,9 +155,9 @@ Each request has further utility options:
 - retry a request x number of times (independent of retry_cb)
 - prioritise request retries to the front / back of the queue (independent of retry_cb)
 
-Rate and concurrency rules are set at class instantiation. Further default options can be overidden here:
+Rate and concurrency rules are set at class instantiation. Further default options can be overridden here:
 - heartbeat: the rate at which the queue is processed (default 20ms)
-- default retry wait (independant of wait_cb, default 500ms)
+- default retry wait (independent of wait_cb, default 500ms)
 
 ## Paging
 [top](#toc)
@@ -209,7 +209,7 @@ const all_data = await fm.fetch<bar_t["data"]>(
 
 In the above example, we used the `collect` utility function. It is slightly opinionated. If `bar_t["data]` is `any[]`,
 then it will flatten the paged results so that `all_data` is also `any[]`.
-This behaviour can be overidden with `collect(data, false)` in which case `all_data` will be `any[][]`
+This behaviour can be overridden with `collect(data, false)` in which case `all_data` will be `any[][]`
 
 Usage of `collect` is optional. If not used, `all_data` will be one of:
 - If `response_cb` is defined: `Awaited<ReturnType<response_cb>>[]` else
@@ -306,7 +306,7 @@ const two_of_four = await Promise.all(promises)
 
 ```
 
-However, because Fetch Manager is queing requests for unknown lengths of time,
+However, because Fetch Manager is queuing requests for unknown lengths of time,
 attaching a native [AbortSignal.timeout](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static) at the initial `fm.fetch` call may lead to unexpected timing results, 
 depending on the result you want to achieve.
 
@@ -339,7 +339,7 @@ The user's abort signal will remain available, ie. the timeout signal is added -
 
 If no `abort_timeout` is given, the default system timeout will be used - which can vary.
 
-If a user AbortSignal is called, all further callbacks are ignored and the abort error is immediately rejected. A timeout signal will however proceed to evaluate any subsequent callbacks in the lifecycle.
+If a user AbortSignal is called, all further callbacks are ignored and the abort error is immediately rejected. A timeout signal will however proceed to evaluate any subsequent callbacks in the life-cycle.
 
 
 ## Options and overloads
@@ -426,7 +426,7 @@ It is important that a target is only defined once across all instances.
 <details>
 <summary>notes for orchestration</summary>
 
-Fetch Manager in a single thread context will throw errors on conflicts - but orchestrators of distributed systems should be mindful of this,
+Fetch Manager in a single thread context will throw errors on conflicts - but orchestraters of distributed systems should be mindful of this,
 and more complex scenarios such as the following:
 
 instance_1 - target defined as:
@@ -440,7 +440,7 @@ instance_2 - target defined as:
 ["foo.com/api/special"]    
 ```
 Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, the target's limit rules are implemented on `instance_2`.
-In a single threaded context, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be managed externally.
+In a single threaded context, Fetch Manager will throw an error - but in a distributed system the conflict will need to be managed externally.
 
 </details>
 
@@ -457,7 +457,7 @@ The anatomy of a fetch is thus ordered as follows:
 fm.fetch(<fm.req>, options?, pager_cb?)
 ```
 
-This translates to a number of function overloadeds:
+This translates to a number of function overloads:
 ```ts
 fm.fetch("url")
 fm.fetch("url", pager_cb)
@@ -619,7 +619,7 @@ If limit settings across a distributed system differ, then global rate calculati
 ## Instance destruction
 [top](#toc)
 
-It may be neeeded to change rate limits for targets - eg. maybe different rates for different times of day.
+It may be needed to change rate limits for targets - eg. maybe different rates for different times of day.
 It is possible to destroy an instance and then re-use it's targets with new limiter rules. Two instance methods are provided:
 ### `FetchManager.kill`
 This will immediately stop processing the queue and all awaiting requests will be rejected with the message "Target group was killed".
@@ -658,7 +658,7 @@ npm i citkane/fetchmanager#v0.1.0 #Github - check for latest release version
 
 ### Types
 Fetch Manager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you helpful documentation.
-### LibFetch
+### LibCallback
 A library of off the shelf re-usable callbacks:
  ```ts
  import FetchManager from "fetch-manager"
