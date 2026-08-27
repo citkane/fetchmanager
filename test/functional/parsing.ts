@@ -51,6 +51,18 @@ describe("parsing", () => {
     await fetch(urls.reset);
   });
 
+  test("it errors on partial path match", async () => {
+    let fm = new FetchManager(1, 1, "sec", ["localhost:3000/api/status"]);
+    let resp = fm.fetch("http://localhost:3000/api/statuses");
+    expect(resp).rejects.toThrow("No target found");
+    await fm.kill();
+
+    fm = new FetchManager(1, 1, "sec", ["localhost:3000/api/statuses"]);
+    resp = fm.fetch("http://localhost:3000/api/status");
+    expect(resp).rejects.toThrow("No target found");
+    await fm.kill();
+  });
+
   test("it retries from fetch options", async () => {
     const trace_cb: fm.cb.trace = (_data) => {
       // console.log(_data);
