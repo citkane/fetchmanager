@@ -1,6 +1,10 @@
 
 # Changelog
 
+## [0.1.9] - 2026-08-27
+### Added
+- Improved documentation.
+
 ## [0.1.8] - 2026-08-26
 ### Added
 - Trace data message now indicates if a request was aborted by the user before it was fetched.
