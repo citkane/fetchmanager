@@ -34,15 +34,15 @@ For Node, Bun and the browser (and [probably Deno](#what-about-deno) too).
 ## Basic usage
 [top](#toc)
 ### Instantiate a Fetch Manager instance
-A Fetch Manager instance sets limits for a group of one or more targets.
+A Fetch Manager instance sets limits for a group of one or more targets. Many instances can exist and operate in parralel.
 ```ts
 import FetchManager from "fetch-manager";
 
 const time_period = "min";
 const rpp_max = 200;        // Maximum Requests Per Period (rpp) ie. the rate limit
-const concurrency_max = 3;  // Maximum active requests at any given time
+const concurrency_max = 3;  // Maximum concurrent requests at any given time
+// Targets can be defined as "host" or more granularly as "host + pathname"
 const fm = new FetchManager(rpp_max, concurrency_max, time_period, [
-  // Targets can be defined as "host" or more granularly as "host + pathname"
   "foo.domain.com",
   "bar.domain.com",
   "baz.domain.com/api/foobar",
@@ -54,17 +54,17 @@ const fm = new FetchManager(rpp_max, concurrency_max, time_period, [
 Use it akin to native `fetch`
 
 ```ts
-const foo_res = await fm.fetch("https://foo.domain.com/api").catch((err) => {
-    // `err` is assured to be one of: 
-    //      a) if no `Response` then `Error`
+// `err` is assured to be one of: 
+//  a) if no `Response` then `Error`
+//  b) if no `Response.ok` then `Response`
+const resp = await fm.fetch("https://foo.domain.com/api").catch((err) => {
     if (err instanceof Error) throw err;    
-    //      b) if no `Response.ok` then `Response`
     console.error(err.status);              
 });
 ```
 
 ### example (2)
-Pre-process response data and inform `fm.fetch` of the expected return type
+Manipulate the response payload and type cast the resolved data
 
 ```ts
 const response_cb: fm.cb.resp = async (resp, _req) => {
@@ -72,13 +72,12 @@ const response_cb: fm.cb.resp = async (resp, _req) => {
 };
 
 const req = new Request("https://bar.domain.com/api")
-// `bar` will be typed as the returned data
-const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }); 
+const bar = await fm.fetch<bar_t["bar"]>(req, { response_cb }).catch(...); 
 ```
 
 ### example (3)
  * a) Retry 503 / 429 status's after a pause based on the response headers.
- * b) Accept non-standard framework / module `RequestInit` shapes 
+ * b) Cooerce non-native framework / module `RequestInit` shapes 
 
 ```ts
 const handlers: {
@@ -92,8 +91,8 @@ const handlers: {
         [503, 429].includes(resp.status);
     },
     // How long to pause the queue before retrying?
+    // We have already filtered out Errors in retry_cb, but the TS pre-processor doesn't know that.
     wait_cb: (resp, _req) => {
-      // We have already filtered out Errors in retry_cb, but the TS pre-processor doesn't know that.
       if (resp instanceof Error) return 0; 
 
       const wait_s = resp.headers.get("Retry-After") || "5";
@@ -102,13 +101,13 @@ const handlers: {
 };
 
 // Unless there is a failure outside of 503 or 429, baz is guaranteed a Response.ok
+// We can coerce a non-native `RequestInit` shape.
+// Ensure that your `global.fetch` is capable of accepting the non-native shape. 
 const baz = await fm.fetch(
     "https://baz.domain.com/api/foobar",
-    // We can force a non-native `RequestInit` form.
-    // Ensure that your `global.fetch` is capable of accepting the non-standard shape. 
     { tls: { rejectUnauthorized: false } } as RequestInit, 
     handlers,
-);
+).catch(...);
 
 ```
 
@@ -125,7 +124,7 @@ but targets cannot overlap on a thread, and should not overlap across a distribu
 ie. a target must not be repeated in multiple instances. If it is, then rate calculations will be inacurate.
 See later documentation on:
 - `FetchManager.stop` and `FetchManager.kill` methods for re-defining targets.
-- `FetchManager.bucket.get` and `FetchManager.bucket.set` methods for orchestration.
+- `FetchManager.bucket.get` and `FetchManager.bucket.set` methods for assisting orchestration.
 
 Caching and orchestration frameworks are outside the scope of this library, and left to the user to implement their own.
 
@@ -163,25 +162,46 @@ Rate and concurrency rules are set at class instantiation. Further default optio
 ## Paging
 [top](#toc)
 
-... Continued from previous example
+A pager_cb can be used to resolve paged results in a single batch.
+We inform the callback of the request shape, `<"req" | "url">` to disambiguate the injected `req` parameter 
 
+For a `<"req">` shape:
 ```ts
-// Inform the callback of the request shape, `<"req" | "url">` to disambiguate the `req` parameter 
+const fm = new FetchMagager(10, 10, "sec", ["bar.domain.com"]);
 const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
-    const { next, data } = (await resp.json()) as bar_type;
-    collect(data);                                  // optional - overrides `response_cb` and flattens the resolved result
-    if (!next) return;                              // return nullish if no more data is expected
+    const { next, data } = (await resp.json()) as bar_t;
+    collect(data);                       // optional - overrides `response_cb` and flattens the resolved result
+    if (!next) return;                   // return nullish if no more data is expected
 
     const url = new URL(req.url);
     url.searchParams.set("next", next);
-    // remove a stale timeout signal (if it was set) - see the Aborting section
-    // req = new Request(req, { signal: undefined });  
-    return new Request(url, req);                   // return a request for more data
+    return new Request(url, req);        // return a request for more data
 };
 
 const req = new Request("https://bar.domain.com/api/paged")
-// The paged data resolves in a single batch.
-const all_data = await fm.fetch<bar_t["data"]>(req, pager_cb);
+const all_data = await fm.fetch<bar_t["data"]>(req, pager_cb).catch(...);
+
+```
+
+For a `<"url">` shape:
+```ts
+const fm = new FetchMagager(10, 10, "sec", ["bar.domain.com"]);
+const pager_cb: fm.cb.pager<"url"> = async (resp, req, collect) => {
+    const { next, data } = (await resp.json()) as bar_t;
+    collect(data);
+    if (!next) return;
+
+    const { url: prev_url, req_init } = req;
+    const url = new URL(prev_url);
+    url.searchParams.set("next", next);
+    return { url: url.toString(), req_init };
+};
+
+const all_data = await fm.fetch<bar_t["data"]>(
+    "https://bar.domain.com/api/paged",
+    { tls: { rejectUnauthorized: false } } as RequestInit,
+    pager_cb,
+).catch(...);
 
 ```
 
@@ -195,20 +215,45 @@ Usage of `collect` is optional. If not used, `all_data` will be one of:
 - If `response_cb` is defined: `Awaited<ReturnType<response_cb>>[]` else
 - `Response[]` 
 
+<details>
+<summary>note about paged abort_timeout</summary>
+If you have used the `abort_timeout` option - then the `Abort.timeout` signal gets attached to the request just before native fetch is called.
+
+Subsequently in your `pager_cb`, if you recycle your previous request - you will want to cancel this previous timer.
+A new timer will be added to the next paged fetch, so you don't want the previous timer to also trigger.
+```ts
+const pager_cb: fm.cb.pager<"req"> = async (resp, req, collect) => {
+    ...
+    const url = new URL(req.url);
+    req = new Request(req, { signal: undefined }) // or re-attach a custom AbortSignal.
+    return new Requst(url, req)
+} 
+
+```
+```ts
+const pager_cb: fm.cb.pager<"url"> = async (resp, req, collect) => {
+    ...
+    const { url: prev_url, req_init } = req;
+    ...
+    req_init.signal = undefined; // or re-attach a custom AbortSignal.
+    return { url: url.toString(), req_init }
+} 
+
+```
+</details>
 
 ## Trace
 [top](#toc)
-
-If used, the trace callback will be executed at every heartbeat while the queue is not paused or empty,
+`trace_cb` provides useful information about the state of the queue.
+If used, it will be executed at every heartbeat while the queue is not paused or empty,
 so be mindful of the resources it may consume.
 
-example:
-Log the amount of request tokens remaining for the period, else a message indicating why the queue is stopped.
+example: Log the amount of request tokens remaining for the period, else a message indicating why the queue is stopped.
 ```ts
 const trace_cb: fm.cb.trace = (trace_data) => {
     console.debug(trace_data.message || trace_data.tokens);
 }
-const fm = new FetchManager(..., { trace_cb })
+const fm = new FetchManager(10, 10, "sec", [...], { trace_cb })
 
 ```
 
@@ -376,8 +421,12 @@ In the shape below, fallback options are specified for `bar.domain.com`
 ]
 ```
 
-It is important that a target is only defined once across all instances. Fetch Manager in a single thread context 
-will throw errors on conflicts - but orchestrators of distributed systems should be mindful of this,
+It is important that a target is only defined once across all instances. 
+
+<details>
+<summary>notes for orchestration</summary>
+
+Fetch Manager in a single thread context will throw errors on conflicts - but orchestrators of distributed systems should be mindful of this,
 and more complex scenarios such as the following:
 
 instance_1 - target defined as:
@@ -393,6 +442,8 @@ instance_2 - target defined as:
 Now calling `instance_1.fetch("https://foo.com/api/special")` is an error, because even though `instance_1` *can* catch it, the target's limit rules are implemented on `instance_2`.
 In a single threaded context, Fetch Manager will throw an error - but in a distributed sytem the conflict will need to be managed externally.
 
+</details>
+
 ### Fetch
 In order to cater for non-standard `RequestInit` forms, a request can be defined as one of two shapes:
 - <`Request`> or
@@ -406,7 +457,7 @@ The anatomy of a fetch is thus ordered as follows:
 fm.fetch(<fm.req>, options?, pager_cb?)
 ```
 
-This translates to a number of overloaded shapes:
+This translates to a number of function overloadeds:
 ```ts
 fm.fetch("url")
 fm.fetch("url", pager_cb)
@@ -473,10 +524,10 @@ and the 500ms wait for `buggy_endpoint` will have expired.
 
 We can also do the inverse, and prioritise request retries to the front of the queue.
 ```ts
-const buggy_important = fm.fetch("http://foo.com/api/buggy", { force_retry: -5 })
+const buggy_important = fm.fetch("http://foo.com/api/buggy", { force_retry: -5 });
 const normal_stuff = Promise.all([...Array(10)].map(
-    () => fm.fetch("https://foo.com/api/stuff"))
-)
+    () => fm.fetch("https://foo.com/api/stuff")
+);
 
 ```
 
@@ -609,16 +660,27 @@ npm i citkane/fetchmanager#v0.1.0 #Github - check for latest release version
 Fetch Manager types are under the `fm` namespace. They are annotated with examples, so your IDE should give you helpful documentation.
 ### LibFetch
 A library of off the shelf re-usable callbacks:
-```ts
-import LibFetch from "fetch-manager/lib";
-const lib_fetch = new LibFetch();
-const wait_cb = lib_fetch.wait.backoff_factory()
-const retry_cb = lib_fetch.retry...
-...etc
+ ```ts
+ import FetchManager from "fetch-manager"
+ import LibCalback from "fetch-manager/lib"
+ 
+ const lib_cb = new LibCallback();
+ const handlers = {
+   retry_cb: lib_cb.retry.generic_factory(),
+   wait_cb: lib_cb.wait.backoff_factory(),
+   response_cb: lib_cb.response.generic,
+ }
+ const fm = new FetchMnagaer(10, 10, "sec", [
+   "api.domain.com"
+ ], handlers)
+ 
+ const status = await fm.fetch<string>("https://api.domain.com/status").catch(...)
+ const dowiki = await fm.fetch<dowiki_t>("https://api.domain.com/dowiki").catch(...)
+ 
 ```
 
 ### Tests
-Tests are made for the Bun framework. You can examine these to better understand the expectations for various aspects of the library.
+Tests run on the Bun framework. You can examine these to better understand the expectations for various aspects of the library.
 ```bash
 git clone https://github.com/citkane/fetchmanager.git
 cd fetchmanager
@@ -630,15 +692,19 @@ bun run_tests
 [top](#toc)
 
 Try a rather nifty WikiData explorer!
-- [NPM wikidata-explore](https://www.npmjs.com/package/wikidata-explore)
-- [Github](https://github.com/citkane/wikidata-explore)
+
+It is a Terminal User Interface that queries the public, rate limited [Wikibase API](https://www.mediawiki.org/wiki/Wikibase/API).
+You can run the demonstration directly:
 
 ```bash
 npx wikidata-explore
 bunx wikidata-explore
 
 ```
-It is a Terminal User Interface that queries the public, rate limited [Wikibase API](https://www.mediawiki.org/wiki/Wikibase/API)
+Examine the code:
+- [NPM wikidata-explore](https://www.npmjs.com/package/wikidata-explore)
+- [Github wikidata-explore](https://github.com/citkane/wikidata-explore)
+
 
 ## What about Deno?
 I don't use Deno, so I am not familiar with it's ecosystem and haven't tried Fetch Manager on it. It will probably work.

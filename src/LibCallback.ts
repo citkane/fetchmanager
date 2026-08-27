@@ -16,8 +16,38 @@
  */
 
 /// <reference path="./types.d.ts" />
+
+/**
+ * # A re-usable library of example callbacks for Fetch Manager
+ * @usage
+ * ```ts
+ * import FetchManager from "fetch-manager"
+ * import LibCalback from "fetch-manager/lib"
+ *
+ * const lib_cb = new LibCallback();
+ * const handlers = {
+ *   retry_cb: lib_cb.retry.generic_factory(),
+ *   wait_cb: lib_cb.wait.backoff_factory(),
+ *   response_cb: lib_cb.response.generic,
+ * }
+ * const fm = new FetchMnagaer(10, 10, "sec", [
+ *   "api.domain.com"
+ * ], handlers)
+ *
+ * const status = await fm.fetch<string>("https://api.domain.com/status").catch(...)
+ * const dowiki = await fm.fetch<dowiki_t>("https://api.domain.com/dowiki").catch(...)
+ *
+ * ```
+ * */
 export default class LibCallback<G = fm.kind> implements fm.lib<G> {
   retry = {
+    /**
+     * ## A generic retry callback with additional options to limit the amount of errors or fails.
+     * @param retry_status [Array<number>?] Which status's to retry for (default [429, 503])
+     * @param max_err [number?] The maximum times to retry on a Error response (defaults to never retry)
+     * @param max_fail [number?] The maximum times to retry on a Response.ok === false (defaults to always retry)
+     * @returns [fm.cb.retry] A Fetch Manager retry_cb function
+     * */
     generic_factory: (
       retry_status: number[] = [429, 503],
       max_error?: number,
@@ -41,6 +71,10 @@ export default class LibCallback<G = fm.kind> implements fm.lib<G> {
     },
   };
   wait = {
+    /**
+     * ## A psuedo-random backoff strategy to help keep you outside of a retry stampede on the server
+     * @returns [fm.cb.wait] A Fetch Manager wait_cb function
+     * */
     backoff_factory: () => {
       let count = 0;
       let ms = 0;
@@ -56,6 +90,21 @@ export default class LibCallback<G = fm.kind> implements fm.lib<G> {
         return ms;
       };
     },
+    /**
+     * ## Wait for a server provided time
+     * @param header_key [string] The response header key to look for the wait value
+     * @param val_cb [(string | null | Error) => number] Function to parse the header value to a ms `number`
+     * @returns [fm.cb.wait] A Fetch Manager wait_cb function
+     * @example
+     * ```ts
+     * const rettry_cb = ...;
+     * const wait_cb = lib_cb.wait.response_factory("Retry-After", (time: string | null | Error)=>{
+     *   if(!time || time instancof Error) return 5000;
+     *   return Number(time) * 1000;
+     * })
+     * const resp = fm.fetch("https://api.domain.com/endpoint", {retry_cb, wait_cb})
+     * ```
+     * */
     response_factory:
       (header_key: string, val_cb: (time: string | null | Error) => number) =>
       (res: Response | Error) => {
@@ -64,6 +113,11 @@ export default class LibCallback<G = fm.kind> implements fm.lib<G> {
       },
   };
   response = {
+    /**
+     * ## Return text, json or Response depending on the "content-type" header
+     * This is the actual callback, not a factory function that returns the callback.
+     * Reference it directly
+     * */
     generic: async (res: Response) => {
       const type = res.headers.get("content-type");
       if (!type) return res;
@@ -73,6 +127,11 @@ export default class LibCallback<G = fm.kind> implements fm.lib<G> {
     },
   };
   trace = {
+    /**
+     * ## Eagerly console.info the trace data
+     * This is the actual callback, not a factory function that returns the callback.
+     * Reference it directly
+     * */
     generic: (data: fm.trace_data) => {
       console.info(data);
     },
