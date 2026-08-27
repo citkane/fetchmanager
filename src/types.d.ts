@@ -519,9 +519,15 @@ namespace fm {
     } & handlers<K>;
 
     type limiter_reqs<K extends fm.kind> = {
-      queue: fetch_fn<K>[];
       is_stopped: () => boolean;
       why_stopped: () => string | undefined;
+      first: () => fetch_fn<G> | undefined;
+      shift: () => fetch_fn<G> | undefined;
+      unshift: (fn: fetch_fn<G>) => void;
+      push: (fn: fetch_fn<G>) => void;
+      len: () => number;
+      trail_trace: () => ctx<G> | undefined;
+      filter_aborted: () => fetch_fn<K>[];
     };
 
     type limiter_paused = {

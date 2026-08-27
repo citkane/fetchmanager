@@ -147,4 +147,25 @@ describe("basic functionality", () => {
     });
     await fm.kill();
   });
+
+  // sends 1000 requests at a rate limit of 10,000/s on the cpu clock tick
+  test("it is accurate under load", async () => {
+    let trace = {} as fm.trace_data;
+    const trace_cb: fm.cb.trace = (data) => (trace = data);
+    const fm = new FetchManager(10000, 1000, "sec", ["localhost:3000"], {
+      heartbeat: 0,
+      trace_cb,
+    });
+    const promises = [...Array(1000)].map(() => fm.fetch(urls.status));
+    const resp = await Promise.all(promises);
+    expect(resp.length).toBe(1000);
+    // wait for next cpu tick
+    await new Promise((r) => setTimeout(r));
+    expect(trace.queue).toBe(0);
+    expect(trace.concurrency).toBe(0);
+    // It is refilling the bucket as expected
+    expect(trace.tokens).toBe(10000);
+    expect(trace.message).toBe("queue empty");
+    await fm.kill();
+  });
 });
